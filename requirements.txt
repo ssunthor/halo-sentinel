@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+confluent-kafka
+geoip2
+websockets
+httpx
+cache
+redis>=5.0.0
+feedparser
+uvloop
+orjson

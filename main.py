@@ -1233,11 +1233,30 @@ def parse_log_entry(raw_bytes):
     main_label = payload.get("main_label") or "N/A"
     hostname = payload.get("source") or "unknown"
     lower_msg = raw_msg.lower()
+    main_label_upper = main_label.upper()
     
-    is_sec = "SECURITY" in main_label and "NON_SECURITY" not in main_label
-    if not is_sec:
-        if "denied" in lower_msg or "block" in lower_msg: is_sec = True
-        elif "fail" in lower_msg or "invalid" in lower_msg: is_sec = True
+    # CATEGORY DETERMINATION (Robust Substring Matching)
+    if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]):
+        category = "Firewall"
+        is_sec = True
+    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper:
+        category = "Authentication"
+        is_sec = True
+    elif "AUTHORIZATION" in main_label_upper or "AUTHORIZATION" in lower_msg:
+        category = "Authorization"
+        is_sec = True
+    elif "INTRUSION" in main_label_upper or "THREAT" in main_label_upper:
+        category = "Firewall"
+        is_sec = True
+    elif "SYSTEM" in main_label_upper or "KERNEL" in main_label_upper or "NON_SECURITY" in main_label_upper:
+        category = "System"
+        is_sec = False
+    elif "SECURITY" in main_label_upper:
+        category = "Security"
+        is_sec = True
+    else:
+        category = "Other"
+        is_sec = False
 
     # OPTIMIZATION: Only run User Regex if keywords exist
     user = "N/A"
@@ -1620,24 +1639,27 @@ def process_log_into_batch(raw_bytes, batch):
         if "denied" in lower_msg or "block" in lower_msg: is_sec = True
         elif "fail" in lower_msg or "invalid" in lower_msg: is_sec = True
 
-    # CATEGORY DETERMINATION (Moved up to support DFP ignoring)
-    if "ftd" in lower_msg or "fpfw" in lower_msg or "asa" in lower_msg or "deny" in lower_msg:
+    # CATEGORY DETERMINATION (Robust Substring Matching)
+    main_label_upper = main_label.upper()
+    
+    if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]):
         category = "Firewall"
         is_sec = True
-    elif "SECURITY_AUTHENTICATION_FAILURE" in main_label or "SECURITY_AUTHENTICATION_SUCCESS" in main_label:
+    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper:
         category = "Authentication"
         is_sec = True
-    elif "SECURITY_AUTHORIZATION_FAILURE" in main_label or "authorization" in raw_msg.lower():
+    elif "AUTHORIZATION" in main_label_upper or "AUTHORIZATION" in lower_msg:
         category = "Authorization"
         is_sec = True
-    elif "SECURITY_FIREWALL_INTRUSION" in main_label or "SECURITY_FIREWALL_BLOCK" in main_label or "SECURITY_DNS_FAILURE" in main_label:
+    elif "INTRUSION" in main_label_upper or "THREAT" in main_label_upper:
         category = "Firewall"
         is_sec = True
-    elif "NON_SECURITY_NORMAL" in main_label:
+    elif "SYSTEM" in main_label_upper or "KERNEL" in main_label_upper or "NON_SECURITY" in main_label_upper:
         category = "System"
         is_sec = False
-    elif "SECURITY_NORMAL" in main_label:
+    elif "SECURITY" in main_label_upper:
         category = "Security"
+        is_sec = True
     else:
         category = "Other"
         is_sec = False

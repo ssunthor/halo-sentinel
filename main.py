@@ -1239,10 +1239,10 @@ def parse_log_entry(raw_bytes):
     if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]):
         category = "Firewall"
         is_sec = True
-    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper:
+    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg:
         category = "Authentication"
         is_sec = True
-    elif "AUTHORIZATION" in main_label_upper or "AUTHORIZATION" in lower_msg:
+    elif "AUTHORIZATION" in main_label_upper or "authorization" in lower_msg:
         category = "Authorization"
         is_sec = True
     elif "INTRUSION" in main_label_upper or "THREAT" in main_label_upper:
@@ -1645,10 +1645,10 @@ def process_log_into_batch(raw_bytes, batch):
     if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]):
         category = "Firewall"
         is_sec = True
-    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper:
+    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg:
         category = "Authentication"
         is_sec = True
-    elif "AUTHORIZATION" in main_label_upper or "AUTHORIZATION" in lower_msg:
+    elif "AUTHORIZATION" in main_label_upper or "authorization" in lower_msg:
         category = "Authorization"
         is_sec = True
     elif "INTRUSION" in main_label_upper or "THREAT" in main_label_upper:

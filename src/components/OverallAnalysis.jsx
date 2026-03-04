@@ -8,7 +8,7 @@ const OverallAnalysis = () => {
     const [countdown, setCountdown] = useState(300);
     // CHANGE 1: If you want it visible by default, set this to false. 
     // If you want it hidden initially, keep it true.
-    const [isCollapsed, setIsCollapsed] = useState(false); 
+    const [isCollapsed, setIsCollapsed] = useState(true); 
 
     useEffect(() => {
         const fetchAnalysis = async () => {

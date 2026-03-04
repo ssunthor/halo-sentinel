@@ -1207,7 +1207,7 @@ def parse_log_entry(raw_bytes):
         clean_host = user_id.split('/')[0] if user_id else "unknown"
 
         clean_score = 5.0 + math.log10(rec_err) if rec_err > 100 else rec_err
-        clean_score = clean_float(clean_score)
+        clean_score = min(clean_float(clean_score) or 0.0, 10.0)
 
         updates['scatter'] = {
             "bytes": round(octets, 2), "port": real_dport, "y": round(clean_score, 4), 
@@ -1270,7 +1270,7 @@ def parse_log_entry(raw_bytes):
     # REMOVED: expensive RE_IP.findall scan. It's too slow for high throughput.
     
     # Check Anomaly Score
-    sys_anomaly_score = clean_float(payload.get("anomaly_score", -1))
+    sys_anomaly_score = min(clean_float(payload.get("anomaly_score", -1)) or 0.0, 10.0)
     if sys_anomaly_score <= 0:
         prio = (payload.get("priority_str") or "low").lower()
         if prio == "critical": sys_anomaly_score = 10.0
@@ -1395,7 +1395,7 @@ def process_log_into_batch(raw_bytes, batch):
     if "anomaly_score" in payload and any(k in payload for k in ["src_ip", "src_addr", "user_id"]):
         cause = payload.get("anomaly_cause") or "Normal"
         rec_err = clean_float(payload.get("mean_abs_err", 0)) or 0.0
-        score = clean_float(payload.get("anomaly_score", 0)) or 0.0
+        score = min(clean_float(payload.get("anomaly_score", 0)) or 0.0, 10.0)
         
         # Robust IP Extraction: Fallback through possible fields
         host_id = payload.get("src_ip") or payload.get("src_addr") or payload.get("user_id") or "unknown"
@@ -1533,6 +1533,7 @@ def process_log_into_batch(raw_bytes, batch):
         # Inline Score Calc
         clean_score = 5.0 + math.log10(rec_err) if rec_err > 100 else rec_err
         if math.isnan(clean_score) or math.isinf(clean_score): clean_score = 0.0
+        clean_score = min(clean_score, 10.0)
 
         # --- REASON ENRICHMENT (Netflow) ---
         if clean_score > 2.0 and "volume" in cause.lower():
@@ -1688,6 +1689,7 @@ def process_log_into_batch(raw_bytes, batch):
     sys_anomaly_score = payload.get("anomaly_score", -1)
     if isinstance(sys_anomaly_score, (int, float)):
          if math.isnan(sys_anomaly_score) or math.isinf(sys_anomaly_score): sys_anomaly_score = 0.0
+         else: sys_anomaly_score = min(float(sys_anomaly_score), 10.0)
     else: sys_anomaly_score = 0.0
 
     if sys_anomaly_score <= 0:

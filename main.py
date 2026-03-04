@@ -1421,9 +1421,15 @@ def process_log_into_batch(raw_bytes, batch):
     # 1. NETFLOW DFP PATH (Morpheus Output)
     # Check for anomaly_score and any of the common host identification fields
     if "anomaly_score" in payload and any(k in payload for k in ["src_ip", "src_addr", "user_id"]):
-        cause = payload.get("anomaly_cause") or "Normal"
-        rec_err = clean_float(payload.get("mean_abs_err", 0)) or 0.0
         score = min(clean_float(payload.get("anomaly_score", 0)) or 0.0, 10.0)
+        rec_err = clean_float(payload.get("mean_abs_err", 0)) or 0.0
+        
+        # Determine Cause (Adjusted for Morpheus DFP: 0.0 is Learning, >0 is Normal/Anomalous)
+        cause = payload.get("anomaly_cause")
+        if not cause:
+            if score == 0.0: cause = "Learning..."
+            elif score <= 2.0: cause = "Normal"
+            else: cause = "Anomalous Activity"
         
         # Robust IP Extraction: Fallback through possible fields
         host_id = payload.get("src_ip") or payload.get("src_addr") or payload.get("user_id") or "unknown"
@@ -1467,7 +1473,7 @@ def process_log_into_batch(raw_bytes, batch):
         # --- REASON ENRICHMENT ---
         if score > 2.0 and "volume" in str(cause).lower():
             cause = f"Traffic Volume Spike (Port {real_dport})"
-        elif score > 5.0 and ("Unknown" in str(cause) or "Normal" in str(cause)):
+        elif score > 5.0 and ("Unknown" in str(cause) or "Normal" in str(cause) or "Learning" in str(cause)):
             cause = f"Anomalous Connection Pattern ({real_dport})"
 
         # DIRECT BATCH UPDATE

@@ -1953,10 +1953,15 @@ def fetch_and_process_batch(consumer, batch_size, timeout, processor=process_log
     return (batch, msg_count) if msg_count > 0 else None
 
 async def kafka_worker_generic(topic, conf, label, eps_key, processor=process_log_into_batch):
+    # Generate a unique group ID for this specific worker to ensure it starts at the latest offset
+    # and doesn't conflict with other workers or previous runs.
+    worker_conf = conf.copy()
+    worker_conf['group.id'] = f"{conf.get('group.id', 'generic_worker')}_{uuid.uuid4().hex[:8]}"
+    
     try:
-        consumer = Consumer(conf)
+        consumer = Consumer(worker_conf)
         consumer.subscribe([topic])
-        print(f"🚀 {label} Backend Started (Threaded Processing Mode)...{topic} {conf}")
+        print(f"🚀 {label} Backend Started (Threaded Processing Mode)...{topic} Group: {worker_conf['group.id']}")
         loop = asyncio.get_running_loop()
         
         while True:

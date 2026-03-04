@@ -1356,6 +1356,23 @@ def process_log_into_batch(raw_bytes, batch):
 
     # PRE-COMPUTE (Avoid repeated lookups)
     timestamp_str = time.strftime('%H:%M:%S')
+    
+    # Try to use provided timestamp if available
+    if payload.get("time_received_ns"):
+        try:
+            ts_ns = float(payload.get("time_received_ns"))
+            timestamp_str = datetime.fromtimestamp(ts_ns / 1e9).strftime('%H:%M:%S')
+        except: pass
+    elif payload.get("timestamp"):
+        try:
+            # Handle both ISO strings and epoch numbers
+            ts = payload.get("timestamp")
+            if isinstance(ts, (int, float)):
+                timestamp_str = datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+            else:
+                timestamp_str = ts.split('T')[-1].split('.')[0] # Quick extraction
+        except: pass
+
     raw_msg = payload.get("message") or ""
 
     # FILTER: Exclude ns1.gtt.net
@@ -1364,7 +1381,7 @@ def process_log_into_batch(raw_bytes, batch):
 
     # DEDUPLICATION (Skip for Firewalls)
     is_firewall = "ftd" in raw_msg.lower() or "fpfw" in raw_msg.lower() or "%ftd" in raw_msg.lower()
-    dedupe_source = payload.get("source") or payload.get("user_id") or "unknown"
+    dedupe_source = payload.get("source") or payload.get("user_id") or payload.get("src_ip") or payload.get("src_addr") or "unknown"
     dedupe_key = hash(f"{dedupe_source}:{raw_msg}")
     
     if not is_firewall and deduplicator.is_duplicate(dedupe_key):
@@ -1374,49 +1391,73 @@ def process_log_into_batch(raw_bytes, batch):
         return
 
     # 1. NETFLOW DFP PATH (Morpheus Output)
-    if "anomaly_score" in payload and ("src_ip" in payload or "user_id" in payload):
-        cause = payload.get("anomaly_cause") or "Unknown"
-        rec_err = clean_float(payload.get("mean_abs_err", 0))
-        score = clean_float(payload.get("anomaly_score", 0))
+    # Check for anomaly_score and any of the common host identification fields
+    if "anomaly_score" in payload and any(k in payload for k in ["src_ip", "src_addr", "user_id"]):
+        cause = payload.get("anomaly_cause") or "Normal"
+        rec_err = clean_float(payload.get("mean_abs_err", 0)) or 0.0
+        score = clean_float(payload.get("anomaly_score", 0)) or 0.0
         
-        # Use src_ip as host, fallback to user_id (which might be IP/Port)
-        host_id = payload.get("src_ip") or payload.get("user_id") or "unknown"
-        clean_host = host_id.split('/')[0] if '/' in str(host_id) else host_id
+        # Robust IP Extraction: Fallback through possible fields
+        host_id = payload.get("src_ip") or payload.get("src_addr") or payload.get("user_id") or "unknown"
+        clean_host = str(host_id).split('/')[0] if '/' in str(host_id) else str(host_id)
         
         # Destination info
-        dst_ip = payload.get("dst_ip") or "unknown"
+        dst_ip = payload.get("dst_ip") or payload.get("dst_addr") or "unknown"
         
         # Traffic info
-        real_dport = int(payload.get("dst_port", 0))
-        real_sport = int(payload.get("src_port", 0))
-        proto = int(payload.get("protocol") or payload.get("proto") or 0)
+        try:
+            real_dport = int(payload.get("dst_port") or 0)
+            real_sport = int(payload.get("src_port") or 0)
+        except (ValueError, TypeError):
+            real_dport = 0
+            real_sport = 0
+
+        # Protocol Handling (Supports "TCP", "UDP", or 6, 17)
+        proto_raw = payload.get("protocol") or payload.get("proto") or 0
+        if isinstance(proto_raw, str):
+            p_up = proto_raw.upper()
+            if p_up == "TCP": proto = 6
+            elif p_up == "UDP": proto = 17
+            elif p_up == "ICMP": proto = 1
+            else:
+                try: proto = int(proto_raw)
+                except: proto = 0
+        else:
+            try: proto = int(proto_raw or 0)
+            except: proto = 0
+            
         bytes_val = payload.get("bytes") or payload.get("log_bytes") or 0
-        if "log_bytes" in payload:
-            # Reverse log scale if needed, but here we just want a display value
-            bytes_val = math.exp(float(payload["log_bytes"])) - 1
+        if "log_bytes" in payload and payload["log_bytes"] is not None:
+            try:
+                # Reverse log scale if needed, but here we just want a display value
+                bytes_val = math.exp(float(payload["log_bytes"])) - 1
+            except: bytes_val = 0
+        else:
+            try: bytes_val = float(bytes_val or 0)
+            except: bytes_val = 0
             
         # --- REASON ENRICHMENT ---
-        if score > 2.0 and "volume" in cause.lower():
+        if score > 2.0 and "volume" in str(cause).lower():
             cause = f"Traffic Volume Spike (Port {real_dport})"
-        elif score > 5.0 and "Unknown" in cause:
+        elif score > 5.0 and ("Unknown" in str(cause) or "Normal" in str(cause)):
             cause = f"Anomalous Connection Pattern ({real_dport})"
 
         # DIRECT BATCH UPDATE
         batch.add_log(state.KEY_NETFLOW_SCATTER, {
             "bytes": round(bytes_val, 2), "port": real_dport, "y": round(score, 4), 
-            "cause": cause, "host": clean_host, "time": timestamp_str
+            "cause": str(cause), "host": clean_host, "time": timestamp_str
         })
         batch.inc_stat(state.KEY_NETFLOW_CAUSES, str(cause), 1)
         if rec_err > 1.0: batch.counts['netflow_anomalies'] += 1
         
         # TOPOLOGY (Nodes and Links)
-        batch.update_topo_node(clean_host, {'type': 'src', 'sources': {'netflow'}, 'score': score, 'val': 1, 'reason': cause})
+        batch.update_topo_node(clean_host, {'type': 'src', 'sources': {'netflow'}, 'score': score, 'val': 1, 'reason': str(cause)})
         if dst_ip != "unknown":
             batch.update_topo_node(dst_ip, {'type': 'dst', 'sources': {'netflow'}, 'val': 1})
             batch.update_topo_link(clean_host, dst_ip, 'allow')
 
         # HOST STATS
-        batch.update_host(clean_host, True, score, "Netflow DFP", reason=cause, sent=bytes_val)
+        batch.update_host(clean_host, True, score, "Netflow DFP", reason=str(cause), sent=bytes_val)
         if dst_ip != "unknown":
             batch.update_host(dst_ip, False, 0.0, "Network Node", received=bytes_val)
 
@@ -1432,7 +1473,7 @@ def process_log_into_batch(raw_bytes, batch):
         if score > 2.0:
             anomaly_key = hash(f"anomaly:{clean_host}:{cause}")
             if not anomaly_deduplicator.is_duplicate(anomaly_key):
-                batch.add_anomaly_entry(clean_host, score, cause, f"Port: {real_dport}, Bytes: {bytes_val:.0f}")
+                batch.add_anomaly_entry(clean_host, score, str(cause), f"Port: {real_dport}, Bytes: {bytes_val:.0f}")
 
         # --- THREAT STATS (Network) ---
         batch.inc_threat_stat('net_sum', score)

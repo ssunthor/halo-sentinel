@@ -1584,24 +1584,18 @@ def process_log_into_batch(raw_bytes, batch):
         batch.inc_threat_stat('net_sum', clean_score)
         batch.inc_threat_stat('net_count', 1.0)
 
-        # --- NEW: NETFLOW DESTINATION EXTRACTION ---
+        # --- NEW: NETFLOW DESTINATION EXTRACTION (Optimized) ---
         enriched_data = {}
         try:
-            # Debug: Check if message looks like CSV
-            # print(f"DEBUG: Processing Netflow Msg: {raw_msg[:50]}...")
-            
-            parts = raw_msg.split(',')
-            if len(parts) > 10:
+            if ',' in raw_msg and raw_msg.count(',') > 10:
+                parts = raw_msg.split(',')
                 dst_raw = parts[9] # "1.2.3.4/24"
                 dst_ip = dst_raw.split('/')[0]
                 
-                # Check if it's a valid IP structure before lookup
                 if dst_ip.count('.') == 3:
                      dst_geo = get_geoip(dst_ip)
                      if dst_geo:
-                        #print(f"DEBUG: Adding DESTINATION {dst_ip} -> {dst_geo['lat']},{dst_geo['lon']}")
                         dst_geo['time'] = timestamp_str
-                        # Add extra info for tooltip
                         dst_geo['src_ip'] = parts[6].split('/')[0]
                         dst_geo['src_port'] = parts[7]
                         dst_geo['dst_port'] = parts[10]
@@ -1610,18 +1604,11 @@ def process_log_into_batch(raw_bytes, batch):
                         if asn_info:
                             dst_geo.update(asn_info)
 
-                        print(f"DEBUG: Netflow Destination Payload: {dst_geo}") 
                         batch.add_destination(dst_geo)
                         if dst_geo.get('country'):
                             batch.add_country_stat(dst_geo['country'])
                         enriched_data = dst_geo
-                     else:
-                        print(f"DEBUG: Failed to geolocate {dst_ip}")
-            else:
-                 pass
-                 # print(f"DEBUG: Netflow msg too short or not CSV. Len: {len(parts)}")
-        except Exception as e:
-            print(f"DEBUG: Netflow Dest Extraction Error: {e}")
+        except: pass
         # -------------------------------------------
 
         # FAST UUID: Time + Random Int is 100x faster than uuid.uuid4()
@@ -1706,9 +1693,6 @@ def process_log_into_batch(raw_bytes, batch):
                 raw_user = m.group(1).rstrip('.').strip()
                 
                 # --- FILTER CHECK ---
-                # 1. Length check
-                # 2. Blocklist check
-                # 3. Unix-style username check (alphanumeric + dot/dash/underscore)
                 if (len(raw_user) > 1 and 
                     raw_user.lower() not in INVALID_USERS and 
                     re.match(r"^[a-zA-Z0-9_\-\.]+$", raw_user)):
@@ -1764,7 +1748,6 @@ def process_log_into_batch(raw_bytes, batch):
                 if not anomaly_deduplicator.is_duplicate(anomaly_key):
                     batch.add_anomaly_entry(hostname, sys_anomaly_score, anomaly_cause, raw_msg[:200])
         else:
-            # Still update node count but with 0 score
             batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
         
     batch.update_host(hostname, is_sec, sys_anomaly_score, category, reason=anomaly_cause)
@@ -1778,66 +1761,59 @@ def process_log_into_batch(raw_bytes, batch):
             dst = dst_match.group(1)
             ltype = "block" if ("block" in lower_msg or "deny" in lower_msg) else "allow"
             
-            # Direct Dict Access (Fastest)
             key = f"{src}-{dst}"
             batch.topo_links[key]['val'] += 1
             if ltype == 'block': 
                 batch.topo_links[key]['type'] = 'block'
                 
                 # --- ATTACK COUNTRY TRACKING ---
-                # Only track if it's a block/deny
-                src_geo = get_geoip(src)
-                if src_geo:
-                    #print(f"DEBUG: Mapping BLOCKED Source: {src} -> {src_geo.get('country')}")
-                    if src_geo.get('country'):
-                        batch.add_attack_country_stat(src_geo['country'])
-                    
-                    # Add to Network Map
-                    src_geo['action'] = 'block'
-                    batch.update_map(src, src_geo)
-                #else:
-                    #print(f"DEBUG: Could not geolocate BLOCKED Source: {src}")
+                # Sample GeoIP lookups to avoid massive overhead
+                if random.random() < 0.1: # Sample 10%
+                    src_geo = get_geoip(src)
+                    if src_geo:
+                        if src_geo.get('country'):
+                            batch.add_attack_country_stat(src_geo['country'])
+                        src_geo['action'] = 'block'
+                        batch.update_map(src, src_geo)
             else:
-                # Add ALLOW traffic to map too (optional, but good for green dots)
-                src_geo = get_geoip(src)
-                if src_geo:
-                    src_geo['action'] = 'allow'
-                    batch.update_map(src, src_geo)
+                if random.random() < 0.01: # Sample 1% for ALLOW traffic
+                    src_geo = get_geoip(src)
+                    if src_geo:
+                        src_geo['action'] = 'allow'
+                        batch.update_map(src, src_geo)
             
-            # Nodes (Blind update - assuming cached site data will be handled elsewhere or skipped)
             batch.update_topo_node(src, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
             batch.update_topo_node(dst, {'type': 'dst', 'sources': {'syslog'}, 'val': 1})
 
-            # --- DESTINATION ENRICHMENT ---
-            dst_geo = get_geoip(dst)
-            if dst_geo:
-                dst_geo['time'] = timestamp_str
-                dst_geo['src_ip'] = src
-                
-                # Optional: Try to extract ports from Syslog msg
-                try:
-                    sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)
-                    dp_match = re.search(r"DstPort\s*:\s*(\d+)", raw_msg, re.I)
-                    dst_geo['src_port'] = sp_match.group(1) if sp_match else "0"
-                    dst_geo['dst_port'] = dp_match.group(1) if dp_match else "0"
-                except:
-                    dst_geo['src_port'] = "0"
-                    dst_geo['dst_port'] = "0"
-                
-                asn_info = get_asn(dst)
-                if asn_info:
-                    dst_geo.update(asn_info)
+            # --- DESTINATION ENRICHMENT (Sampled) ---
+            if random.random() < 0.05: # Sample 5%
+                dst_geo = get_geoip(dst)
+                if dst_geo:
+                    dst_geo['time'] = timestamp_str
+                    dst_geo['src_ip'] = src
+                    
+                    try:
+                        sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)
+                        dp_match = re.search(r"DstPort\s*:\s*(\d+)", raw_msg, re.I)
+                        dst_geo['src_port'] = sp_match.group(1) if sp_match else "0"
+                        dst_geo['dst_port'] = dp_match.group(1) if dp_match else "0"
+                    except:
+                        dst_geo['src_port'] = "0"
+                        dst_geo['dst_port'] = "0"
+                    
+                    asn_info = get_asn(dst)
+                    if asn_info:
+                        dst_geo.update(asn_info)
 
-                batch.add_destination(dst_geo)
-                if dst_geo.get('country'):
-                    batch.add_country_stat(dst_geo['country'])
-                enriched_data = dst_geo
+                    batch.add_destination(dst_geo)
+                    if dst_geo.get('country'):
+                        batch.add_country_stat(dst_geo['country'])
+                    enriched_data = dst_geo
 
     # LOG ENTRY
     fast_uuid = f"{time.time()}-{len(raw_msg)}-{random.randint(0, 1000000)}"
     log_payload = {
-        "time": timestamp_str, "host": hostname, "msg": raw_msg[:5000], # Truncate massive messages
-        #"category": "Security" if is_sec else "Other", 
+        "time": timestamp_str, "host": hostname, "msg": raw_msg[:5000],
         "priority": "high" if sys_anomaly_score > 3 else "low", 
         "uuid": fast_uuid,
         "is_security_event": is_sec, "anomaly_score": sys_anomaly_score,
@@ -1845,6 +1821,7 @@ def process_log_into_batch(raw_bytes, batch):
     }
     log_payload.update(enriched_data)
     batch.add_log(state.KEY_LOGS, log_payload)
+
 
 # --- REPLACEMENT FUNCTION ---
 def process_batch_cpu_bound(messages):

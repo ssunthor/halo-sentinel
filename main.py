@@ -1239,7 +1239,16 @@ def parse_log_entry(raw_bytes):
     if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]):
         category = "Firewall"
         is_sec = True
-    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg:
+    elif "squid-" in lower_msg:
+        category = "Proxy"
+        is_sec = False
+    elif "postgres" in lower_msg or "mysql" in lower_msg:
+        category = "Database"
+        is_sec = False
+    elif "httpd" in lower_msg or "haproxy" in lower_msg:
+        category = "HTTP"
+        is_sec = False
+    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg or "logoff" in lower_msg or "radiusd" in lower_msg:
         category = "Authentication"
         is_sec = True
     elif "AUTHORIZATION" in main_label_upper or "authorization" in lower_msg:
@@ -1248,10 +1257,10 @@ def parse_log_entry(raw_bytes):
     elif "INTRUSION" in main_label_upper or "THREAT" in main_label_upper:
         category = "Firewall"
         is_sec = True
-    elif "SYSTEM" in main_label_upper or "KERNEL" in main_label_upper or "NON_SECURITY" in main_label_upper:
+    elif "SYSTEM" in main_label_upper or "KERNEL" in main_label_upper or "NON_SECURITY" in main_label_upper or "system daemon" in lower_msg:
         category = "System"
         is_sec = False
-    elif "SECURITY" in main_label_upper:
+    elif "SECURITY" in main_label_upper or "ssh" in lower_msg:
         category = "Security"
         is_sec = True
     else:

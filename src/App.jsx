@@ -1270,14 +1270,11 @@ function App() {
     if (alertedHostsRef.current.has(hostId)) return;
     alertedHostsRef.current.add(hostId);
 
-    // 1. Open Chat
-    setIsChatOpen(true);
-
-    // 2. Add System Notification
+    // 1. Add System Notification (Note: auto-show setIsChatOpen(true) removed per user request)
     const systemMsg = { role: 'system', content: `CRITICAL ANOMALY DETECTED: ${hostId}` };
     setChatMessages(prev => [...prev, systemMsg]);
 
-    // 3. Request AI Analysis
+    // 2. Request AI Analysis
     const prompt = `A critical anomaly of ${score.toFixed(2)} was just detected on host ${hostId} for the reason: "${reason || 'Unknown'}". Please analyze this and provide immediate recommendations.`;
     
     try {

@@ -608,7 +608,12 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     
     // --- ANOMALY-ONLY FILTERING ---
     if (showOnlyAnomalies) {
-        const anomalousNodeIds = new Set(data.nodes.filter(n => n.score && n.score > 0).map(n => n.id));
+        const anomalousNodes = data.nodes.filter(n => n.score && n.score > 0);
+        const anomalousNodeIds = new Set(anomalousNodes.map(n => n.id));
+        
+        // Ensure anomalous nodes are always visible even if they have no links
+        anomalousNodeIds.forEach(id => visibleNodeIds.add(id));
+
         activeLinks = activeLinks.filter(l => {
             const s = typeof l.source === 'object' ? l.source.id : l.source;
             const t = typeof l.target === 'object' ? l.target.id : l.target;
@@ -641,7 +646,10 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         });
     }
 
-    activeLinks.forEach(l => { visibleNodeIds.add(l.source); visibleNodeIds.add(l.target); });
+    activeLinks.forEach(l => { 
+        visibleNodeIds.add(typeof l.source === 'object' ? l.source.id : l.source); 
+        visibleNodeIds.add(typeof l.target === 'object' ? l.target.id : l.target); 
+    });
     const visibleNodesRaw = galaxyNodes.filter(n => visibleNodeIds.has(n.id));
 
     const newNodes = []; const currentIds = new Set();

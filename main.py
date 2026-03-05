@@ -1924,25 +1924,61 @@ def process_batch_chunk(messages):
             
     return batch, local_anomaly_sum, local_anomaly_count
 
-# 3. Optimized Kafka Worker
-# Create a dedicated wrapper that runs in the thread
+# 3. Optimized Kafka Worker (True Parallel Processing)
 def fetch_and_process_batch(consumer, batch_size, timeout, processor=process_log_into_batch):
     # 1. Fetch (Releases GIL internally in C-library)
     msgs = consumer.consume(batch_size, timeout)
     if not msgs:
         return None
 
-    # 2. Process (CPU Bound - keep this off the main loop!)
-    batch = BatchAccumulator()
-    msg_count = 0
+    # 2. Parallel Processing (CPU Bound)
+    # Split the messages into smaller chunks for parallel parsing
+    num_threads = 8  # Use a portion of the worker pool
+    chunk_count = len(msgs)
+    chunk_size = max(1, chunk_count // num_threads)
+    chunks = [msgs[i:i + chunk_size] for i in range(0, chunk_count, chunk_size)]
     
-    for msg in msgs:
-        if not msg.error():
-            # This is your existing function or the new netflow one
-            processor(msg.value(), batch) 
-            msg_count += 1
+    def process_chunk(msg_chunk):
+        local_batch = BatchAccumulator()
+        count = 0
+        for m in msg_chunk:
+            if not m.error():
+                processor(m.value(), local_batch)
+                count += 1
+        return local_batch, count
+
+    # Submit chunks to the thread pool for simultaneous processing
+    futures = [thread_pool.submit(process_chunk, c) for c in chunks]
+    
+    # 3. Aggregate Results
+    main_batch = BatchAccumulator()
+    total_count = 0
+    for future in futures:
+        try:
+            local_batch, count = future.result()
+            # Efficiently merge local results into the main batch
+            main_batch.counts.update(local_batch.counts)
+            for k, v in local_batch.stat_inc.items():
+                for field, amt in v.items(): main_batch.inc_stat(k, field, amt)
             
-    return (batch, msg_count) if msg_count > 0 else None
+            for k, logs in local_batch.logs.items():
+                if k not in main_batch.logs: main_batch.logs[k] = []
+                main_batch.logs[k].extend(logs)
+                
+            main_batch.topo_nodes.update(local_batch.topo_nodes)
+            main_batch.topo_links.update(local_batch.topo_links)
+            main_batch.hosts.update(local_batch.hosts)
+            main_batch.users.update(local_batch.users)
+            main_batch.map_points.update(local_batch.map_points)
+            main_batch.destinations.extend(local_batch.destinations)
+            main_batch.country_stats.update(local_batch.country_stats)
+            main_batch.attack_countries.update(local_batch.attack_countries)
+            
+            total_count += count
+        except Exception as e:
+            print(f"Parallel Parsing Error: {e}")
+            
+    return (main_batch, total_count) if total_count > 0 else None
 
 async def kafka_worker_generic(topic, conf, label, eps_key, processor=process_log_into_batch):
     # Generate a unique group ID for this specific worker to ensure it starts at the latest offset

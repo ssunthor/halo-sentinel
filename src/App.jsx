@@ -886,6 +886,11 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         enableNodeDrag={true}
         enableNavigationControls={true}
         showNavInfo={true}
+        onNodeHover={setTooltipNode}
+        onBackgroundClick={() => {
+            setSelectedNode(null);
+            setTooltipNode(null);
+        }}
         onNodeClick={(node) => {
             setSelectedNode(node);
             if (onNodeClick) onNodeClick(node);
@@ -958,7 +963,10 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
                 fgRef.current.zoom(4, 2000);
             }
         }}
-        onBackgroundClick={handleBackgroundClick}
+        onBackgroundClick={() => {
+            setSelectedNode(null);
+            setTooltipNode(null);
+        }}
         
         // --- LINK STYLING (2D) ---
         linkColor={link => {

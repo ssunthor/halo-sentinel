@@ -1102,28 +1102,38 @@ class RedisDashboardState:
         }
 
     def cleanup_stale_data(self):
-        # Run infrequently (every 60 seconds is enough for a demo)
-        if time.time() % 60 > 1: return
+        """Prunes old nodes and links to keep the database small and fast."""
+        now = time.time()
+        # Run every 60 seconds
+        if now % 60 > 5: return
 
-        # "Demo Mode": Only delete nodes that haven't been seen in 24 hours
-        cutoff_time = time.time() - TOPOLOGY_TTL_SECONDS
+        node_cutoff = now - 3600  # 1 Hour for nodes
+        link_cutoff = now - 600   # 10 Minutes for links (keep galaxy fresh)
         
         try:
+            # 1. Prune Nodes
             stale_nodes = []
-            # Scan nodes
-            for nid, raw_data in self.r.hscan_iter(self.KEY_TOPO_NODES, count=500):
+            for nid, raw_data in self.r.hscan_iter(self.KEY_TOPO_NODES, count=1000):
                 try:
                     node = json_loads(raw_data)
-                    # CRITICAL FIX: Removed "and node.get('score', 0) == 0"
-                    # We now keep EVERYTHING until it is 24 hours old.
-                    if node.get('last_seen', 0) < cutoff_time:
+                    if node.get('last_seen', 0) < node_cutoff:
                         stale_nodes.append(nid)
                 except: pass
             
             if stale_nodes:
-                print(f"🧹 Janitor: Pruning {len(stale_nodes)} ancient nodes (>24h)...")
+                print(f"🧹 Janitor: Pruning {len(stale_nodes)} old nodes...")
                 for i in range(0, len(stale_nodes), 1000):
                     self.r.hdel(self.KEY_TOPO_NODES, *stale_nodes[i:i+1000])
+
+            # 2. Prune Links (Netflow creates MILLIONS of these)
+            # Since links don't have 'last_seen' in the current schema, 
+            # we will look them up in batches or just wipe them if they exceed a count.
+            # Faster approach: If links > 20k, just clear them to reset the galaxy.
+            link_count = self.r.hlen(self.KEY_TOPO_LINKS)
+            if link_count > 20000:
+                print(f"🧹 Janitor: Galaxy Overload ({link_count} links). Clearing links to reset...")
+                self.r.delete(self.KEY_TOPO_LINKS)
+
         except Exception as e:
             print(f"Janitor Error: {e}")
     
@@ -2071,13 +2081,13 @@ async def metric_worker():
         
         state.smoothed_eps = total_eps # Components are already smoothed
         state.push_log(state.KEY_EPS_HISTORY, {"time": time.strftime('%H:%M:%S'), "eps": int(state.smoothed_eps)}, max_len=60)
-        state.cleanup_stale_data()
+        
         if state.current_global_anomaly_count > 0:
             avg = state.current_global_anomaly_sum / state.current_global_anomaly_count
             state.push_log(state.KEY_ANOMALY_HISTORY, {"time": time.strftime('%H:%M:%S'), "avg_score": round(avg, 2)}, max_len=60)
             state.current_global_anomaly_sum = 0
             state.current_global_anomaly_count = 0
-        state.perform_passive_decay()
+        
         await asyncio.sleep(1)
 
 class VulnerabilityRequestBroker:
@@ -2727,6 +2737,26 @@ async def global_snapshot_worker():
             print(f"Snapshot Worker Error: {e}")
         await asyncio.sleep(3.0)
 
+async def passive_decay_worker():
+    print("⏳ DECAY: Anomaly healing worker started (10s interval)...")
+    while True:
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(thread_pool, state.perform_passive_decay)
+        except Exception as e:
+            print(f"Decay Worker Error: {e}")
+        await asyncio.sleep(10.0)
+
+async def janitor_worker():
+    print("🧹 JANITOR: Database pruning worker started (1m interval)...")
+    while True:
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(thread_pool, state.cleanup_stale_data)
+        except Exception as e:
+            print(f"Janitor Worker Error: {e}")
+        await asyncio.sleep(60.0)
+
 @app.on_event("startup")
 async def startup_event():
     print("🚀 STARTUP: Application starting...")
@@ -2740,6 +2770,8 @@ async def startup_event():
     asyncio.create_task(dns_janitor_worker())
     asyncio.create_task(update_netbox_prefixes())
     asyncio.create_task(global_snapshot_worker())
+    asyncio.create_task(passive_decay_worker())
+    asyncio.create_task(janitor_worker())
     print("✅ STARTUP: All tasks launched.")
 
 if __name__ == "__main__":

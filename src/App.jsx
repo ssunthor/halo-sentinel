@@ -683,7 +683,11 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     });
     for (const id of linksById.current.keys()) { if (!currentLinkIds.has(id)) linksById.current.delete(id); }
 
-    setGraphData({ nodes: newNodes, links: newLinks });
+    // SORTING: Ensure anomalous nodes and blocked links are at the end (render on top)
+    const sortedNodes = [...newNodes].sort((a, b) => (a.score || 0) - (b.score || 0));
+    const sortedLinks = [...newLinks].sort((a, b) => (a.type === 'block' ? 1 : -1));
+
+    setGraphData({ nodes: sortedNodes, links: sortedLinks });
   }, [data, showBlocked, showAllowed, selectedDc, searchTerm, showExternal, performanceMode, selectedNode, isPaused, showOnlyAnomalies]);
 
   return (

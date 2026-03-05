@@ -35,11 +35,13 @@ const CyberCity = ({ data, onHostClick }) => {
 
   // 2. City Layout Logic (Group by Site into "Neighborhoods")
   const cityData = useMemo(() => {
-    if (!data || !data.topology || !data.topology.nodes) return { nodes: [], links: [] };
+    // Priority: Use 'all_hosts' list if available, fallback to topology nodes
+    const sourceNodes = data?.all_hosts || data?.topology?.nodes || [];
+    if (sourceNodes.length === 0) return { nodes: [], links: [] };
 
     // Group nodes by site
     const sites = {};
-    data.topology.nodes.forEach(node => {
+    sourceNodes.forEach(node => {
         const site = node.site_name || 'External';
         if (!sites[site]) sites[site] = [];
         sites[site].push(node);

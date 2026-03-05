@@ -539,8 +539,8 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   const paintNode = React.useCallback((node, ctx, globalScale) => {
     if (node.x === undefined || node.y === undefined || Number.isNaN(node.x) || Number.isNaN(node.y)) return;
 
-    const safeVal = Math.max(node.val || 1, 1); 
-    const baseRadius = 2 + Math.log(safeVal) * 1.5; 
+    // REVERTED: Using fixed radius instead of scaling by val/bandwidth
+    const baseRadius = 3; 
     
     let color = THEME.blue; 
     let glowColor = 'rgba(59, 130, 246, 0.3)';
@@ -805,7 +805,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             if (node.type === 'src') return THEME.green;
             return THEME.blue;
         }}
-        nodeVal={node => Math.max(node.val || 1, 1)}
+        nodeVal={3}
         // Disable default label since we use sprites
         nodeLabel={null} 
         nodeOpacity={0.9}
@@ -826,7 +826,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             
             const sprite = new SpriteText(node.name || node.id);
             sprite.color = node.score > 5 ? '#ffaaaa' : '#e0e0e0';
-            sprite.textHeight = 4 + (node.val || 1); // Scale with node size
+            sprite.textHeight = 8; // Fixed height
             sprite.position.y = 8; // Offset above node
             return sprite;
         }}

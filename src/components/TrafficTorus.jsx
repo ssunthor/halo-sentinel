@@ -121,6 +121,7 @@ const TrafficTorus = ({ data, onHostClick }) => {
           nodeColor={n => n.color}
           nodeLabel={n => n.name || n.id}
           nodeRelSize={4}
+          nodeVal={1} // Override inherited 'val' to ensure uniform size
           
           // Link Styling (Flow Ribbons)
           linkWidth={l => l.width}

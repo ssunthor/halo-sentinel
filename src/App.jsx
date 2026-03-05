@@ -422,6 +422,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   const [availableSites, setAvailableSites] = useState([]);
   const [showAllowed, setShowAllowed] = useState(true); 
   const [showBlocked, setShowBlocked] = useState(true); 
+  const [expansion, setExpansion] = useState(1.0); // Expansion factor (1.0 = default)
 
   const nodesById = useRef(new Map());
   const linksById = useRef(new Map());
@@ -457,23 +458,27 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     if (fgRef.current) {
       const forceEngine = fgRef.current.d3Force;
       
+      // Scale charge strength and distance by expansion factor
       forceEngine('charge')
-        .strength(-300)      
-        .distanceMax(200);   
+        .strength(-300 * expansion)      
+        .distanceMax(200 * expansion);   
       
       forceEngine('link')
         .distance(link => {
             const sVal = Math.max(link.source.val || 1, 1);
             const tVal = Math.max(link.target.val || 1, 1);
-            // Logarithmic logic to prevent explosion
-            return 30 + (Math.log(sVal) + Math.log(tVal)) * 10; 
+            // Scale base distance and logarithmic component by expansion
+            return (30 + (Math.log(sVal) + Math.log(tVal)) * 10) * expansion; 
         })
         .strength(0.8);
 
       // Disable centering force when a node is selected to prevent the subgraph from flying to the middle
       forceEngine('center').strength(selectedNode ? 0 : 0.15); 
+      
+      // Reheat simulation so it reacts to slider
+      fgRef.current.d3ReheatSimulation();
     }
-  }, [viewMode, selectedNode]);
+  }, [viewMode, selectedNode, expansion]);
 
   // 4. HANDLERS
   const togglePause = () => {
@@ -701,6 +706,21 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
       {/* CONTROLS */}
       <div className="absolute top-4 right-4 z-10 pointer-events-auto flex flex-wrap justify-end gap-2 max-w-[80%]">
          
+         {/* --- EXPANSION SLIDER --- */}
+         <div className="bg-gray-900 border border-gray-600 rounded px-3 py-1 flex items-center gap-3 shadow-xl">
+            <span className="text-[9px] font-bold text-gray-500 uppercase">Dense</span>
+            <input 
+                type="range" 
+                min="0.5" 
+                max="5.0" 
+                step="0.1" 
+                value={expansion} 
+                onChange={(e) => setExpansion(parseFloat(e.target.value))}
+                className="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+            <span className="text-[9px] font-bold text-gray-500 uppercase">Expanded</span>
+         </div>
+
          <div className="relative group">
             <select className="bg-gray-900 border border-gray-600 rounded pl-2 pr-8 py-1.5 text-xs text-white focus:border-green-500 focus:outline-none shadow-xl appearance-none cursor-pointer hover:bg-gray-800"
                 value={selectedDc} onChange={(e) => setSelectedDc(e.target.value)}>

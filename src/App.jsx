@@ -886,7 +886,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         enableNodeDrag={true}
         enableNavigationControls={true}
         showNavInfo={true}
-        onNodeHover={setTooltipNode}
         onBackgroundClick={() => {
             setSelectedNode(null);
             setTooltipNode(null);

@@ -710,9 +710,10 @@ class RedisDashboardState:
                 batch_sources = set(data.get('sources', []))
                 combined_sources = list(existing_sources | batch_sources)
 
-                # ACCUMULATE TRAFFIC (Important for visualizations)
+                # ACCUMULATE TRAFFIC & EVENTS (Important for visualizations)
                 existing_sent = float(existing.get('sent', 0)) if existing else 0.0
                 existing_received = float(existing.get('received', 0)) if existing else 0.0
+                existing_val = int(existing.get('val', 0)) if existing else 0
                 
                 node_payload = {
                     'id': str(nid),
@@ -723,7 +724,8 @@ class RedisDashboardState:
                     'last_seen': float(current_time),
                     'sources': combined_sources,
                     'sent': existing_sent + float(data.get('sent', 0)),
-                    'received': existing_received + float(data.get('received', 0))
+                    'received': existing_received + float(data.get('received', 0)),
+                    'val': existing_val + int(data.get('val', 0))
                 }
                 
                 # Preserve existing reason if not in this batch
@@ -969,6 +971,8 @@ class RedisDashboardState:
             n['security_events'] = stats.get('security', 0)
             n['sent'] = stats.get('sent', 0)
             n['received'] = stats.get('received', 0)
+            # Use total_events as val if it's larger
+            n['val'] = max(n.get('val', 0), n['total_events'])
             n['category'] = stats.get('category')
             n['reason'] = stats.get('reason') or n.get('reason')
             n['is_internal'] = is_internal(nid)

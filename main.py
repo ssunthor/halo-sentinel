@@ -1955,28 +1955,48 @@ def fetch_and_process_batch(consumer, batch_size, timeout, processor=process_log
     total_count = 0
     for future in futures:
         try:
-            local_batch, count = future.result()
+            lb, count = future.result()
+            total_count += count
+            
             # Efficiently merge local results into the main batch
-            main_batch.counts.update(local_batch.counts)
-            for k, v in local_batch.stat_inc.items():
+            main_batch.counts.update(lb.counts)
+            
+            for k, v in lb.stats_inc.items():
                 for field, amt in v.items(): main_batch.inc_stat(k, field, amt)
             
-            for k, logs in local_batch.logs.items():
-                if k not in main_batch.logs: main_batch.logs[k] = []
-                main_batch.logs[k].extend(logs)
-                
-            main_batch.topo_nodes.update(local_batch.topo_nodes)
-            main_batch.topo_links.update(local_batch.topo_links)
-            main_batch.hosts.update(local_batch.hosts)
-            main_batch.users.update(local_batch.users)
-            main_batch.map_points.update(local_batch.map_points)
-            main_batch.destinations.extend(local_batch.destinations)
-            main_batch.country_stats.update(local_batch.country_stats)
-            main_batch.attack_countries.update(local_batch.attack_countries)
+            for k, v in lb.list_push.items():
+                main_batch.list_push[k].extend(v)
             
-            total_count += count
+            for k, v in lb.threat_stats.items():
+                main_batch.inc_threat_stat(k, v)
+                
+            main_batch.destinations.extend(lb.destinations)
+            main_batch.anomaly_entries.extend(lb.anomaly_entries)
+            
+            main_batch.country_activity.update(lb.country_activity)
+            main_batch.attack_country_activity.update(lb.attack_country_activity)
+            
+            # Complex Objects
+            for nid, node_data in lb.topo_nodes.items():
+                main_batch.update_topo_node(nid, node_data)
+                
+            for link_key, link_data in lb.topo_links.items():
+                src, dst = link_key.split('-')
+                main_batch.update_topo_link(src, dst, link_data['type'])
+                
+            for host_id, h_data in lb.host_activity.items():
+                main_batch.update_host(host_id, False, h_data['score'], reason=h_data['reason'], sent=h_data['sent'], received=h_data['received'])
+
+            for user_id, u_data in lb.user_activity.items():
+                for h in u_data['hosts']:
+                    main_batch.update_user(user_id, h)
+            
+            main_batch.map_updates.update(lb.map_updates)
+            
         except Exception as e:
             print(f"Parallel Parsing Error: {e}")
+            import traceback
+            traceback.print_exc()
             
     return (main_batch, total_count) if total_count > 0 else None
 

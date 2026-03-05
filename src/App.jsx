@@ -422,6 +422,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   const [availableSites, setAvailableSites] = useState([]);
   const [showAllowed, setShowAllowed] = useState(true); 
   const [showBlocked, setShowBlocked] = useState(true); 
+  const [showOnlyAnomalies, setShowOnlyAnomalies] = useState(false);
 
   const nodesById = useRef(new Map());
   const linksById = useRef(new Map());
@@ -605,6 +606,16 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
 
     const visibleNodeIds = new Set();
     
+    // --- ANOMALY-ONLY FILTERING ---
+    if (showOnlyAnomalies) {
+        const anomalousNodeIds = new Set(data.nodes.filter(n => n.score && n.score > 0).map(n => n.id));
+        activeLinks = activeLinks.filter(l => {
+            const s = typeof l.source === 'object' ? l.source.id : l.source;
+            const t = typeof l.target === 'object' ? l.target.id : l.target;
+            return anomalousNodeIds.has(s) || anomalousNodeIds.has(t);
+        });
+    }
+
     // --- FILTER EXTERNAL NOISE ---
     let galaxyNodes = data.nodes;
     if (!showExternal) {
@@ -673,7 +684,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     for (const id of linksById.current.keys()) { if (!currentLinkIds.has(id)) linksById.current.delete(id); }
 
     setGraphData({ nodes: newNodes, links: newLinks });
-  }, [data]);
+  }, [data, showBlocked, showAllowed, selectedDc, searchTerm, showExternal, performanceMode, selectedNode, isPaused, showOnlyAnomalies]);
 
   return (
     <div 
@@ -734,6 +745,11 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
          <button onClick={() => setShowExternal(!showExternal)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${showExternal ? 'bg-purple-900/40 text-purple-400 border-purple-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
             <Sparkles size={14} className={showExternal ? 'animate-pulse' : ''} />
             {showExternal ? 'DENSITY: HIGH' : 'DENSITY: LOW'}
+         </button>
+
+         <button onClick={() => setShowOnlyAnomalies(!showOnlyAnomalies)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${showOnlyAnomalies ? 'bg-red-900/40 text-red-400 border-red-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
+            <AlertTriangle size={14} className={showOnlyAnomalies ? 'animate-pulse' : ''} />
+            {showOnlyAnomalies ? 'ANOMALIES: ONLY' : 'ANOMALIES: ALL'}
          </button>
 
          <button onClick={() => setPerformanceMode(!performanceMode)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${performanceMode ? 'bg-green-900/40 text-green-400 border-green-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>

@@ -805,6 +805,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             if (node.type === 'src') return THEME.green;
             return THEME.blue;
         }}
+        nodeRelSize={1.5}
         nodeVal={3}
         // Disable default label since we use sprites
         nodeLabel={null} 
@@ -925,6 +926,10 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         graphData={graphData}
         backgroundColor="#050505"
         nodeCanvasObject={paintNode}
+        nodePointerAreaPaint={(node, color, ctx) => {
+            ctx.fillStyle = color;
+            ctx.beginPath(); ctx.arc(node.x, node.y, 4, 0, 2 * Math.PI, false); ctx.fill();
+        }}
         linkCurvature={0.25}
         
         // --- PHYSICS (2D STABILIZATION) ---

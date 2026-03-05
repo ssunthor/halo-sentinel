@@ -886,14 +886,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         enableNodeDrag={true}
         enableNavigationControls={true}
         showNavInfo={true}
-        onNodeHover={node => setTooltipNode(node)}
-        onLinkHover={link => setTooltipNode(null)}
-        onBackgroundClick={() => {
-            setSelectedNode(null);
-            setTooltipNode(null);
-        }}
         onNodeClick={(node) => {
-            if (!node) return;
             setSelectedNode(node);
             if (onNodeClick) onNodeClick(node);
             if (fgRef.current) {
@@ -906,6 +899,22 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
                     3000  // ms transition duration
                 );
             }
+        }}
+        onBackgroundClick={handleBackgroundClick}
+        
+        // --- PHYSICS ---
+        d3VelocityDecay={0.9} // High friction to stop bouncing (matched to 2D)
+        d3AlphaDecay={0.05}   // Faster stabilization
+        
+        // --- INTERACTION ---
+        onNodeHover={(node, prevNode) => {
+            setTooltipNode(node);
+            // We can't get mouse coords from this event easily in 3D canvas without raycaster logic.
+            // But we can update state. 
+            // Actually, react-force-graph exposes 'onNodeClick', etc. 
+            // For hovering in 3D, we usually rely on the library's built-in tooltip `nodeLabel`.
+            // But we wanted custom HTML.
+            // We can capture mousemove on the CONTAINER.
         }}
       />
       ) : (
@@ -938,10 +947,10 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         linkDirectionalParticleColor={() => '#ffffff'}
         
         // --- INTERACTION (2D) ---
-        onNodeHover={node => setTooltipNode(node)}
-        onLinkHover={link => setTooltipNode(null)}
+        onNodeHover={(node) => {
+            setTooltipNode(node);
+        }}
         onNodeClick={(node) => {
-            if (!node) return;
             setSelectedNode(node);
             if (onNodeClick) onNodeClick(node);
             if (fgRef.current) {
@@ -949,10 +958,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
                 fgRef.current.zoom(4, 2000);
             }
         }}
-        onBackgroundClick={() => {
-            setSelectedNode(null);
-            setTooltipNode(null);
-        }}
+        onBackgroundClick={handleBackgroundClick}
         
         // --- LINK STYLING (2D) ---
         linkColor={link => {

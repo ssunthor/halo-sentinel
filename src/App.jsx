@@ -188,7 +188,9 @@ const normalizeLog = (rawLog) => {
     }
 
     let timeStr = "--:--:--";
-    if (rawLog.timestamp) {
+    if (rawLog.time) {
+        timeStr = rawLog.time;
+    } else if (rawLog.timestamp) {
         const date = new Date(rawLog.timestamp);
         timeStr = date.toLocaleTimeString('en-US', { hour12: false });
     } else if (rawLog.syslog_timestamp) {

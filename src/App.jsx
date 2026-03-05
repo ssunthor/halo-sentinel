@@ -886,11 +886,14 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         enableNodeDrag={true}
         enableNavigationControls={true}
         showNavInfo={true}
+        onNodeHover={node => setTooltipNode(node)}
+        onLinkHover={link => setTooltipNode(null)}
         onBackgroundClick={() => {
             setSelectedNode(null);
             setTooltipNode(null);
         }}
         onNodeClick={(node) => {
+            if (!node) return;
             setSelectedNode(node);
             if (onNodeClick) onNodeClick(node);
             if (fgRef.current) {
@@ -903,15 +906,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
                     3000  // ms transition duration
                 );
             }
-        }}
-        
-        // --- PHYSICS ---
-        d3VelocityDecay={0.9} // High friction to stop bouncing (matched to 2D)
-        d3AlphaDecay={0.05}   // Faster stabilization
-        
-        // --- INTERACTION ---
-        onNodeHover={(node) => {
-            setTooltipNode(node);
         }}
       />
       ) : (
@@ -944,10 +938,10 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         linkDirectionalParticleColor={() => '#ffffff'}
         
         // --- INTERACTION (2D) ---
-        onNodeHover={(node) => {
-            setTooltipNode(node);
-        }}
+        onNodeHover={node => setTooltipNode(node)}
+        onLinkHover={link => setTooltipNode(null)}
         onNodeClick={(node) => {
+            if (!node) return;
             setSelectedNode(node);
             if (onNodeClick) onNodeClick(node);
             if (fgRef.current) {

@@ -465,6 +465,7 @@ class RedisDashboardState:
                 time.sleep(2)
         
         self.KEY_LOGS = "morpheus:logs:recent:v2"
+        self.KEY_FIREWALL_LOGS = "morpheus:logs:firewall:v2"
         self.KEY_COUNTS = "morpheus:metrics:counts"
         self.KEY_EPS_HISTORY = "morpheus:metrics:eps_history"
         self.KEY_ANOMALY_HISTORY = "morpheus:anomalies:global_history"
@@ -1083,9 +1084,9 @@ class RedisDashboardState:
                 "top_attack_countries": get_counters(self.KEY_ATTACK_COUNTRY_STATS)
             },
             "tables": { 
-                "logs": get_list(self.KEY_LOGS, limit=50), 
-                "users": users, 
-                "sudo_commands": sudo_items[:50], # Reuse the list we fetched above
+                            "logs": get_list(self.KEY_LOGS, limit=50),
+                            "firewall_logs": get_list(self.KEY_FIREWALL_LOGS, limit=100),
+                            "users": users,                "sudo_commands": sudo_items[:50], # Reuse the list we fetched above
                 "root_shell_sessions": [], 
                 "major_anomaly_events": get_list(self.KEY_MAJOR_ANOMALIES, limit=50) 
             },
@@ -1840,7 +1841,9 @@ def process_log_into_batch(raw_bytes, batch):
                         batch.add_country_stat(dst_geo['country'])
                     enriched_data = dst_geo
 
-    # LOG ENTRY
+    # LOG ENTRY (Separate Firewalls from System Logs)
+    log_key = state.KEY_FIREWALL_LOGS if category == "Firewall" else state.KEY_LOGS
+
     fast_uuid = f"{time.time()}-{len(raw_msg)}-{random.randint(0, 1000000)}"
     log_payload = {
         "time": timestamp_str, "host": hostname, "msg": raw_msg[:5000],
@@ -1850,7 +1853,7 @@ def process_log_into_batch(raw_bytes, batch):
         "category": category
     }
     log_payload.update(enriched_data)
-    batch.add_log(state.KEY_LOGS, log_payload)
+    batch.add_log(log_key, log_payload)
 
 
 # --- REPLACEMENT FUNCTION ---

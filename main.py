@@ -407,12 +407,14 @@ class BatchAccumulator:
 
     def update_topo_node(self, nid, updates):
         if nid not in self.topo_nodes:
-            self.topo_nodes[nid] = {'val': 0, 'sources': set(), 'score': 0, 'type': 'dst', 'reason': None}
+            self.topo_nodes[nid] = {'val': 0, 'sources': set(), 'score': 0, 'type': 'dst', 'reason': None, 'sent': 0.0, 'received': 0.0}
         node = self.topo_nodes[nid]
         for k, v in updates.items():
             if k == 'sources':
                 for s in v: node['sources'].add(s)
             elif k == 'val': node['val'] += v
+            elif k in ['sent', 'received']:
+                node[k] += float(v or 0)
             elif k == 'score': 
                 if v > node['score']:
                     node['score'] = v
@@ -708,6 +710,10 @@ class RedisDashboardState:
                 batch_sources = set(data.get('sources', []))
                 combined_sources = list(existing_sources | batch_sources)
 
+                # ACCUMULATE TRAFFIC (Important for visualizations)
+                existing_sent = float(existing.get('sent', 0)) if existing else 0.0
+                existing_received = float(existing.get('received', 0)) if existing else 0.0
+                
                 node_payload = {
                     'id': str(nid),
                     'name': str(data.get('name', nid)),
@@ -716,6 +722,8 @@ class RedisDashboardState:
                     'reason': data.get('reason'),
                     'last_seen': float(current_time),
                     'sources': combined_sources,
+                    'sent': existing_sent + float(data.get('sent', 0)),
+                    'received': existing_received + float(data.get('received', 0))
                 }
                 
                 # Preserve existing reason if not in this batch
@@ -1511,9 +1519,9 @@ def process_log_into_batch(raw_bytes, batch):
         if rec_err > 1.0: batch.counts['netflow_anomalies'] += 1
         
         # TOPOLOGY (Nodes and Links)
-        batch.update_topo_node(clean_host, {'type': 'src', 'sources': {'netflow'}, 'score': score, 'val': 1, 'reason': str(cause)})
+        batch.update_topo_node(clean_host, {'type': 'src', 'sources': {'netflow'}, 'score': score, 'val': 1, 'reason': str(cause), 'sent': bytes_val})
         if dst_ip != "unknown":
-            batch.update_topo_node(dst_ip, {'type': 'dst', 'sources': {'netflow'}, 'val': 1})
+            batch.update_topo_node(dst_ip, {'type': 'dst', 'sources': {'netflow'}, 'val': 1, 'received': bytes_val})
             batch.update_topo_link(clean_host, dst_ip, 'allow')
 
         # HOST STATS

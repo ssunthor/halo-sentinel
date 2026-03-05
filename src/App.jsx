@@ -905,21 +905,14 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
                 );
             }
         }}
-        onBackgroundClick={handleBackgroundClick}
         
         // --- PHYSICS ---
         d3VelocityDecay={0.9} // High friction to stop bouncing (matched to 2D)
         d3AlphaDecay={0.05}   // Faster stabilization
         
         // --- INTERACTION ---
-        onNodeHover={(node, prevNode) => {
+        onNodeHover={(node) => {
             setTooltipNode(node);
-            // We can't get mouse coords from this event easily in 3D canvas without raycaster logic.
-            // But we can update state. 
-            // Actually, react-force-graph exposes 'onNodeClick', etc. 
-            // For hovering in 3D, we usually rely on the library's built-in tooltip `nodeLabel`.
-            // But we wanted custom HTML.
-            // We can capture mousemove on the CONTAINER.
         }}
       />
       ) : (

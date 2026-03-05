@@ -62,7 +62,8 @@ const CyberCity = ({ data, onHostClick }) => {
             const bx = siteX + (bIdx % bGridSize) * buildingSpacing;
             const bz = siteZ + Math.floor(bIdx / bGridSize) * buildingSpacing;
             
-            const totalTraffic = (node.sent || 0) + (node.received || 0);
+            // Fallback to event count (val) if bytes are missing/zero
+            const totalTraffic = (node.sent || 0) + (node.received || 0) + ((node.val || 0) * 1000); 
             const height = Math.max(5, Math.log10(totalTraffic + 1) * 15);
             const score = node.score || 0;
 

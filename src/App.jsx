@@ -1935,7 +1935,7 @@ function App() {
               <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} />
               <NavButton id="city" label="Cyber City" icon={Building2} activeTab={activeTab} setTab={setActiveTab} />
               <NavButton id="hive" label="Behavioral Hive" icon={Box} activeTab={activeTab} setTab={setActiveTab} />
-              <NavButton id="torus" label="Traffic Torus" icon={Disc} activeTab={activeTab} setTab={setActiveTab} />
+	  {/* <NavButton id="torus" label="Traffic Torus" icon={Disc} activeTab={activeTab} setTab={setActiveTab} /> */}
             </CollapsibleNavSection>
 
             <NavButton id="anomalies" label="System Log DNA" icon={AlertTriangle} activeTab={activeTab} setTab={setActiveTab} />
@@ -2133,10 +2133,10 @@ function App() {
              <CyberCity data={data} onHostClick={handleHostClick} />
           )}
 
-          {/* --- TAB: TRAFFIC TORUS --- */}
+          {/* --- TAB: TRAFFIC TORUS --- 
           {activeTab === 'torus' && (
              <TrafficTorus data={data} onHostClick={handleHostClick} />
-          )}
+          )} */}
 
           {/* --- TAB: NETFLOW GALAXY --- */}
           {activeTab === 'netflow_galaxy' && (

@@ -1304,9 +1304,9 @@ function App() {
     }
   };
 
-  const [logHistory, setLogHistory] = useState([]); 
-  const [aggregatedStats, setAggregatedStats] = useState({ countries: {}, hosts: {}, attackCountries: {} });
-  const [status, setStatus] = useState("Initializing Link...");
+    const [logHistory, setLogHistory] = useState([]);
+    const [firewallHistory, setFirewallHistory] = useState([]);
+    const [aggregatedStats, setAggregatedStats] = useState({ countries: {}, hosts: {}, attackCountries: {} });  const [status, setStatus] = useState("Initializing Link...");
   const [activeTab, setActiveTab] = useState("overview"); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
@@ -1340,8 +1340,10 @@ function App() {
   };
 
   const seenLogSignatures = useRef(new Set());
+  const seenFirewallSignatures = useRef(new Set());
   const selectedUserRef = useRef(null);
   const logHistoryRef = useRef([]);
+  const firewallHistoryRef = useRef([]);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -1455,6 +1457,32 @@ function App() {
 
         if (uniqueIncomingLogs.length > 0) {
            setLogHistory(finalHistory);
+        }
+
+        // --- NEW: FIREWALL LOG PROCESSING ---
+        let uniqueFirewallLogs = [];
+        if (parsed.tables?.firewall_logs) {
+            const normalizedFirewall = parsed.tables.firewall_logs.map(normalizeLog);
+            uniqueFirewallLogs = normalizedFirewall.reduce((acc, log) => {
+                const sig = getLogSignature(log);
+                if (!seenFirewallSignatures.current.has(sig)) {
+                    seenFirewallSignatures.current.add(sig);
+                    acc.push(log);
+                }
+                return acc;
+            }, []);
+        }
+
+        if (uniqueFirewallLogs.length > 0) {
+            const updatedFirewall = [...uniqueFirewallLogs, ...firewallHistoryRef.current].slice(0, 1000);
+            firewallHistoryRef.current = updatedFirewall;
+            setFirewallHistory(updatedFirewall);
+            
+            // Clean up signatures periodically
+            if (seenFirewallSignatures.current.size > 15000) {
+                seenFirewallSignatures.current.clear();
+                updatedFirewall.slice(0, 500).forEach(l => seenFirewallSignatures.current.add(getLogSignature(l)));
+            }
         }
 
         if (parsed.tables?.major_anomaly_events) {
@@ -2805,7 +2833,7 @@ function App() {
               </div>
               <div className="bg-[#121212] border border-gray-800 rounded-lg p-5">
                   <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 flex items-center gap-2"><Activity size={16} className="text-red-500"/> Firewall Activity</h3>
-                  <NetworkLogTable logs={logHistory} onHostClick={handleHostClick} />
+                  <NetworkLogTable logs={firewallHistory} onHostClick={handleHostClick} />
               </div>
             </div>
           )}

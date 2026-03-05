@@ -1083,12 +1083,17 @@ class RedisDashboardState:
 
         # Return full host list for inventory (Capped at 3k for stability)
         # Filtered to only show hosts with active DFP
-        all_hosts_list = [n for n in (anomalous_nodes + internal_nodes + regular_external) 
-                          if n.get('score', 0) > 0 or 'netflow' in n.get('sources', []) or 'netflow_v9' in n.get('sources', [])]
+        all_hosts_list = []
+        for n in (anomalous_nodes + internal_nodes + regular_external):
+            if n.get('score', 0) > 0 or 'netflow' in n.get('sources', []) or 'netflow_v9' in n.get('sources', []):
+                # Ensure all vital stats are in the inventory objects
+                all_hosts_list.append(n)
+        
         all_hosts_list = all_hosts_list[:3000]
 
         return {
             "metrics": { "eps": 0, "counts": counts, "seen_users": len(user_raw), "seen_hosts": len(system_hosts) },
+            "all_hosts": all_hosts_list,
             "charts": { 
                 "volume": get_list(self.KEY_EPS_HISTORY, limit=60), 
                 "top_hosts": hosts, 

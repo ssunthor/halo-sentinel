@@ -254,6 +254,7 @@ def get_site_for_ip(ip_str):
         return None
     return None
 
+@lru_cache(maxsize=10000)
 def get_geoip(ip):
     # Mock fallback for POC visualization
     def mock_geo(ip_addr):
@@ -1798,14 +1799,13 @@ def process_log_into_batch(raw_bytes, batch):
                 batch.topo_links[key]['type'] = 'block'
                 
                 # --- ATTACK COUNTRY TRACKING ---
-                # Sample GeoIP lookups to avoid massive overhead
-                if random.random() < 0.1: # Sample 10%
-                    src_geo = get_geoip(src)
-                    if src_geo:
-                        if src_geo.get('country'):
-                            batch.add_attack_country_stat(src_geo['country'])
-                        src_geo['action'] = 'block'
-                        batch.update_map(src, src_geo)
+                # Now that we have lru_cache, we can map ALL blocks for high fidelity
+                src_geo = get_geoip(src)
+                if src_geo:
+                    if src_geo.get('country'):
+                        batch.add_attack_country_stat(src_geo['country'])
+                    src_geo['action'] = 'block'
+                    batch.update_map(src, src_geo)
             else:
                 if random.random() < 0.01: # Sample 1% for ALLOW traffic
                     src_geo = get_geoip(src)
@@ -1816,12 +1816,12 @@ def process_log_into_batch(raw_bytes, batch):
             batch.update_topo_node(src, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
             batch.update_topo_node(dst, {'type': 'dst', 'sources': {'syslog'}, 'val': 1})
 
-            # --- DESTINATION ENRICHMENT (Sampled) ---
-            if random.random() < 0.05: # Sample 5%
-                dst_geo = get_geoip(dst)
-                if dst_geo:
-                    dst_geo['time'] = timestamp_str
-                    dst_geo['src_ip'] = src
+            # --- DESTINATION ENRICHMENT ---
+            # Map ALL destinations (lru_cache makes this safe)
+            dst_geo = get_geoip(dst)
+            if dst_geo:
+                dst_geo['time'] = timestamp_str
+                dst_geo['src_ip'] = src
                     
                     try:
                         sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)

@@ -1684,19 +1684,11 @@ function App() {
   const mapMarkers = useMemo(() => {
     if (!data || !data.map) return [];
     const validPoints = data.map.filter(p => p && typeof p.lat === 'number' && typeof p.lon === 'number');
-    const recentPoints = validPoints.slice(0, 150); 
+    const recentPoints = validPoints.slice(0, 500); 
     const grouped = {};
     recentPoints.forEach(p => {
       const key = `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`;
-      
-      // Determine action priority (Block > Allow)
-      // Assuming 'action' field is available in map data (backend needs to send it)
-      // If not, we might need to rely on 'priority' or infer from log data.
-      // Based on previous backend work, map updates are simple geo objects.
-      // Let's assume we can pass 'action' or 'is_blocked' in map update.
-      // For now, if we don't have 'action', we keep existing priority logic or default to 'allow' (green).
-      
-      const isBlocked = p.action === 'block' || p.action === 'deny' || p.priority === 'critical'; // Fallback to critical
+      const isBlocked = p.action === 'block' || p.action === 'deny' || p.priority === 'critical';
 
       if (grouped[key]) {
         grouped[key].count += 1;
@@ -1705,7 +1697,8 @@ function App() {
         grouped[key] = { ...p, count: 1, isBlocked };
       }
     });
-    return Object.values(grouped);
+    // SORT: Blocked markers last to render on top
+    return Object.values(grouped).sort((a, b) => (a.isBlocked === b.isBlocked) ? 0 : a.isBlocked ? 1 : -1);
   }, [data?.map]);
 
   const persistentCharts = useMemo(() => {

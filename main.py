@@ -1692,6 +1692,9 @@ def process_log_into_batch(raw_bytes, batch):
     if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]):
         category = "Firewall"
         is_sec = True
+    elif "error" in lower_msg or "failed" in lower_msg:
+        category = "Error"
+        is_sec = True
     elif "sudo" in lower_msg:
         category = "Sudo"
         is_sec = True
@@ -1704,7 +1707,13 @@ def process_log_into_batch(raw_bytes, batch):
     elif "named" in lower_msg or "dns" in lower_msg:
         category = "DNS"
         is_sec = False
-    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg:
+    elif "systemd" in lower_msg:
+        category = "System"
+        is_sec = False
+    elif "ftp" in lower_msg:
+        category = "Data Transfer"
+        is_sec = True
+    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg or "denied" in lower_msg or "radius" in lower_msg:
         category = "Authentication"
         is_sec = True
     elif "AUTHORIZATION" in main_label_upper or "authorization" in lower_msg:

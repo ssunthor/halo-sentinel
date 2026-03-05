@@ -1822,24 +1822,24 @@ def process_log_into_batch(raw_bytes, batch):
             if dst_geo:
                 dst_geo['time'] = timestamp_str
                 dst_geo['src_ip'] = src
-                    
-                    try:
-                        sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)
-                        dp_match = re.search(r"DstPort\s*:\s*(\d+)", raw_msg, re.I)
-                        dst_geo['src_port'] = sp_match.group(1) if sp_match else "0"
-                        dst_geo['dst_port'] = dp_match.group(1) if dp_match else "0"
-                    except:
-                        dst_geo['src_port'] = "0"
-                        dst_geo['dst_port'] = "0"
-                    
-                    asn_info = get_asn(dst)
-                    if asn_info:
-                        dst_geo.update(asn_info)
+                
+                try:
+                    sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)
+                    dp_match = re.search(r"DstPort\s*:\s*(\d+)", raw_msg, re.I)
+                    dst_geo['src_port'] = sp_match.group(1) if sp_match else "0"
+                    dst_geo['dst_port'] = dp_match.group(1) if dp_match else "0"
+                except:
+                    dst_geo['src_port'] = "0"
+                    dst_geo['dst_port'] = "0"
+                
+                asn_info = get_asn(dst)
+                if asn_info:
+                    dst_geo.update(asn_info)
 
-                    batch.add_destination(dst_geo)
-                    if dst_geo.get('country'):
-                        batch.add_country_stat(dst_geo['country'])
-                    enriched_data = dst_geo
+                batch.add_destination(dst_geo)
+                if dst_geo.get('country'):
+                    batch.add_country_stat(dst_geo['country'])
+                enriched_data = dst_geo
 
     # LOG ENTRY (Separate Firewalls from System Logs)
     log_key = state.KEY_FIREWALL_LOGS if category == "Firewall" else state.KEY_LOGS

@@ -490,6 +490,11 @@ class RedisDashboardState:
         self.smoothed_eps = 0.0
         self.current_global_anomaly_sum = 0
         self.current_global_anomaly_count = 0
+        
+        # Performance Cache
+        self.cached_snapshot = None
+        self.cached_snapshot_external = None
+        self.last_snapshot_time = 0
 
         if not self.r.exists(self.KEY_COUNTS):
             initial_counts = { "security": 0, "auth_fail": 0, "logons": 0, "sudo": 0, "root": 0, "firewall_block": 0, "netflow_anomalies": 0 }
@@ -497,6 +502,12 @@ class RedisDashboardState:
         
         # CLEAR ON STARTUP
         self.r.delete(self.KEY_MAJOR_ANOMALIES)
+
+    def refresh_global_snapshot(self):
+        """Pre-calculate snapshots for both display modes to save CPU."""
+        self.cached_snapshot = self.get_snapshot(show_external=False)
+        self.cached_snapshot_external = self.get_snapshot(show_external=True)
+        self.last_snapshot_time = time.time()
 
     def record_host_history(self):
         """
@@ -659,7 +670,10 @@ class RedisDashboardState:
             if items:
                 serialized = list(map(json_dumps_bytes, items))
                 pipe.lpush(key, *serialized)
-                pipe.ltrim(key, 0, 4999)
+                
+                # OPTIMIZATION: Keep system logs shorter for faster UI response
+                trim_limit = 999 if key == self.KEY_LOGS else 4999
+                pipe.ltrim(key, 0, trim_limit)
 
         # 3. Topology Nodes (Preserve Hostnames logic)
         nodes_to_update = list(batch.topo_nodes.keys())
@@ -2029,8 +2043,10 @@ async def kafka_worker_generic(topic, conf, label, eps_key, processor=process_lo
             
             if result:
                 batch, msg_count = result
-                # Only the Redis commit happens in the main loop (or you can thread this too)
-                state.commit_batch(batch)
+                
+                # --- PERFORMANCE FIX: Threaded Commit ---
+                # Move synchronous Redis operations to thread pool to keep main loop free
+                loop.run_in_executor(thread_pool, state.commit_batch, batch)
 
                 dt = max(time.perf_counter() - fetch_start, 0.001)
                 rate = msg_count / dt
@@ -2466,15 +2482,19 @@ async def websocket_endpoint(websocket: WebSocket):
     
     try:
         while is_active:
-            # 1. HEAVY LIFTING: Generate Snapshot in Thread
-            snapshot = await loop.run_in_executor(thread_pool, partial(state.get_snapshot, show_external=ws_state["show_external"]))
+            # 1. OPTIMIZED: Use Cached Snapshot
+            # Fallback to direct calculation if worker hasn't run yet
+            if ws_state["show_external"]:
+                snapshot = state.cached_snapshot_external or await loop.run_in_executor(thread_pool, partial(state.get_snapshot, show_external=True))
+            else:
+                snapshot = state.cached_snapshot or await loop.run_in_executor(thread_pool, partial(state.get_snapshot, show_external=False))
             
-            # 2. Update Metrics
-            if snapshot['charts']['volume']:
-                snapshot['metrics']['eps'] = snapshot['charts']['volume'][0]['eps']
+            # 2. Update EPS (from latest live state)
+            snapshot['metrics']['eps'] = round(state.smoothed_eps, 1)
 
             # 3. SERIALIZATION
-            json_str = await loop.run_in_executor(thread_pool, lambda: json_dumps(snapshot))
+            # We skip JSON re-serialization if we want to be even faster, but snapshots change slightly (EPS).
+            json_str = json_dumps(snapshot)
 
             # 4. SEND AS TEXT (With safety check)
             if is_active:
@@ -2696,6 +2716,17 @@ async def threat_score_worker():
             
         await asyncio.sleep(300) # Wait 5 minutes for next window
 
+async def global_snapshot_worker():
+    print("💎 SNAPSHOT: Background refresh worker started (3s interval)...")
+    while True:
+        try:
+            # We run this heavy Redis scan in a separate thread to not block other workers
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(thread_pool, state.refresh_global_snapshot)
+        except Exception as e:
+            print(f"Snapshot Worker Error: {e}")
+        await asyncio.sleep(3.0)
+
 @app.on_event("startup")
 async def startup_event():
     print("🚀 STARTUP: Application starting...")
@@ -2708,6 +2739,7 @@ async def startup_event():
     asyncio.create_task(host_history_worker())
     asyncio.create_task(dns_janitor_worker())
     asyncio.create_task(update_netbox_prefixes())
+    asyncio.create_task(global_snapshot_worker())
     print("✅ STARTUP: All tasks launched.")
 
 if __name__ == "__main__":

@@ -83,8 +83,41 @@ const HostInventory = ({ data, onHostClick }) => {
      h.name.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
+  const stats = useMemo(() => {
+    return {
+        total: hosts.length,
+        critical: hosts.filter(h => h.score > 3).length,
+        healthy: hosts.filter(h => h.score <= 3).length
+    };
+  }, [hosts]);
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
+      {/* SUMMARY STATS */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-[#121212] border border-gray-800 p-4 rounded-lg shadow-lg flex items-center justify-between">
+              <div>
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Total Assets</p>
+                  <p className="text-2xl font-black text-white">{stats.total}</p>
+              </div>
+              <Server className="text-blue-500 opacity-20" size={32} />
+          </div>
+          <div className="bg-[#121212] border border-red-900/30 p-4 rounded-lg shadow-lg flex items-center justify-between">
+              <div>
+                  <p className="text-[10px] font-bold text-red-500/70 uppercase tracking-widest">High Risk (> 3.0)</p>
+                  <p className="text-2xl font-black text-red-500">{stats.critical}</p>
+              </div>
+              <Shield className="text-red-500 opacity-20" size={32} />
+          </div>
+          <div className="bg-[#121212] border border-green-900/30 p-4 rounded-lg shadow-lg flex items-center justify-between">
+              <div>
+                  <p className="text-[10px] font-bold text-green-500/70 uppercase tracking-widest">Healthy/Low Risk (≤ 3.0)</p>
+                  <p className="text-2xl font-black text-green-500">{stats.healthy}</p>
+              </div>
+              <Activity className="text-green-500 opacity-20" size={32} />
+          </div>
+      </div>
+
       {/* HEADER & FILTERS */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-[#121212] p-5 rounded-lg border border-gray-800 shadow-lg">
         <div>

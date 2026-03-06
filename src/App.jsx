@@ -2046,7 +2046,7 @@ function App() {
                 <MetricCard label="Throughput" value={`${data.metrics.eps} EPS`} icon={Activity} color={THEME.green} />
                 <MetricCard label="Notable Events" value={data.metrics.counts.security} icon={AlertTriangle} color={THEME.orange} />
                 <MetricCard label="Auth Failures" value={data.metrics.counts.auth_fail} icon={Lock} color={THEME.red} />
-                <MetricCard label="Active Users" value={data.metrics.seen_users} icon={Users} color="#3b82f6" />
+                <MetricCard label="Users Seen" value={data.metrics.seen_users} icon={Users} color="#3b82f6" />
                 <MetricCard label="Active Hosts" value={data.metrics.seen_hosts} icon={Server} color="#8b5cf6" />
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

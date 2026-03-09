@@ -391,8 +391,11 @@ class BatchAccumulator:
         self.country_activity = Counter()
         self.attack_country_activity = Counter()
         self.threat_stats = defaultdict(float)
+        self.analysis_requests = [] # New: Queue for AI analysis
 
     def add_log(self, key, item): self.list_push[key].append(item)
+    def add_analysis_request(self, host, score, reason, msg):
+        self.analysis_requests.append((host, score, reason, msg))
     def add_anomaly_entry(self, host, score, reason, msg):
         self.anomaly_entries.append({
             "host": host, "score": score, "reason": reason, "msg": msg, 
@@ -1558,10 +1561,8 @@ def process_log_into_batch(raw_bytes, batch):
             anomaly_key = hash(f"anomaly:{clean_host}:{cause}")
             if not anomaly_deduplicator.is_duplicate(anomaly_key):
                 batch.add_anomaly_entry(clean_host, score, str(cause), f"Port: {real_dport}, Bytes: {bytes_val:.0f}")
-                # AI ANALYSIS TRIGGER: Request background analysis for this host
-                if host_analysis_broker:
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(host_analysis_broker.request_analysis(clean_host, score, str(cause), raw_msg or str(payload)))
+                # AI ANALYSIS TRIGGER: Queue background analysis for this host
+                batch.add_analysis_request(clean_host, score, str(cause), raw_msg or str(payload))
 
         # --- THREAT STATS (Network) ---
         batch.inc_threat_stat('net_sum', score)
@@ -1828,10 +1829,8 @@ def process_log_into_batch(raw_bytes, batch):
                 anomaly_key = hash(f"anomaly:{hostname}:{anomaly_cause}")
                 if not anomaly_deduplicator.is_duplicate(anomaly_key):
                     batch.add_anomaly_entry(hostname, sys_anomaly_score, anomaly_cause, raw_msg[:200])
-                    # AI ANALYSIS TRIGGER: Request background analysis
-                    if host_analysis_broker:
-                        loop = asyncio.get_event_loop()
-                        loop.create_task(host_analysis_broker.request_analysis(hostname, sys_anomaly_score, anomaly_cause, raw_msg))
+                    # AI ANALYSIS TRIGGER: Queue background analysis
+                    batch.add_analysis_request(hostname, sys_anomaly_score, anomaly_cause, raw_msg)
         else:
             batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
         
@@ -2052,6 +2051,7 @@ def fetch_and_process_batch(consumer, batch_size, timeout, processor=process_log
                 
             main_batch.destinations.extend(lb.destinations)
             main_batch.anomaly_entries.extend(lb.anomaly_entries)
+            main_batch.analysis_requests.extend(lb.analysis_requests) # New: Aggregate requests
             
             main_batch.country_activity.update(lb.country_activity)
             main_batch.attack_country_activity.update(lb.attack_country_activity)
@@ -2113,6 +2113,11 @@ async def kafka_worker_generic(topic, conf, label, eps_key, processor=process_lo
                 # --- PERFORMANCE FIX: Threaded Commit ---
                 # Move synchronous Redis operations to thread pool to keep main loop free
                 loop.run_in_executor(thread_pool, state.commit_batch, batch)
+
+                # --- AI ANALYSIS: Trigger in main loop ---
+                if host_analysis_broker and batch.analysis_requests:
+                    for req in batch.analysis_requests:
+                        asyncio.create_task(host_analysis_broker.request_analysis(*req))
 
                 dt = max(time.perf_counter() - fetch_start, 0.001)
                 rate = msg_count / dt

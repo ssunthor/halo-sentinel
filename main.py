@@ -488,6 +488,7 @@ class RedisDashboardState:
         self.KEY_THREAT_SCORE = "morpheus:metrics:threat:score"
         self.KEY_HOST_HISTORY_PREFIX = "morpheus:history:host:"
         self.KEY_HOST_ANOMALIES_PREFIX = "morpheus:logs:host:anomalies:"
+        self.KEY_HOST_ANALYSIS_PREFIX = "morpheus:analysis:host:"
 
         self.live_eps = 0.0
         self.eps_components = defaultdict(float)
@@ -550,6 +551,10 @@ class RedisDashboardState:
         key = f"{self.KEY_HOST_ANOMALIES_PREFIX}{host_id}"
         raw = self.r.lrange(key, 0, -1)
         return [json_loads(x) for x in raw]
+
+    def get_host_analysis(self, host_id):
+        key = f"{self.KEY_HOST_ANALYSIS_PREFIX}{host_id}"
+        return self.r.get(key)
 
     def get_all_hosts(self):
         """
@@ -1553,6 +1558,10 @@ def process_log_into_batch(raw_bytes, batch):
             anomaly_key = hash(f"anomaly:{clean_host}:{cause}")
             if not anomaly_deduplicator.is_duplicate(anomaly_key):
                 batch.add_anomaly_entry(clean_host, score, str(cause), f"Port: {real_dport}, Bytes: {bytes_val:.0f}")
+                # AI ANALYSIS TRIGGER: Request background analysis for this host
+                if host_analysis_broker:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(host_analysis_broker.request_analysis(clean_host, score, str(cause), raw_msg or str(payload)))
 
         # --- THREAT STATS (Network) ---
         batch.inc_threat_stat('net_sum', score)
@@ -1819,6 +1828,10 @@ def process_log_into_batch(raw_bytes, batch):
                 anomaly_key = hash(f"anomaly:{hostname}:{anomaly_cause}")
                 if not anomaly_deduplicator.is_duplicate(anomaly_key):
                     batch.add_anomaly_entry(hostname, sys_anomaly_score, anomaly_cause, raw_msg[:200])
+                    # AI ANALYSIS TRIGGER: Request background analysis
+                    if host_analysis_broker:
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(host_analysis_broker.request_analysis(hostname, sys_anomaly_score, anomaly_cause, raw_msg))
         else:
             batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
         
@@ -2132,6 +2145,54 @@ async def metric_worker():
             state.current_global_anomaly_count = 0
         
         await asyncio.sleep(1)
+
+class HostAnalysisBroker:
+    def __init__(self, state):
+        self.queue = asyncio.Queue()
+        self.state = state
+        self.analyzed_hosts = {} # Cache within the process to prevent duplicate simultaneous requests
+
+    async def worker(self):
+        print("🤖 AI: Host Anomaly Analysis worker started...")
+        async with httpx.AsyncClient(verify=False) as client:
+            while True:
+                host_id, score, reason, log_msg = await self.queue.get()
+                try:
+                    # 1. Prepare Prompt
+                    prompt = f"""Analyze this network anomaly for host {host_id}.
+                    
+Score: {score:.2f}
+Detected Reason: {reason}
+Raw Event Data: {log_msg[:1000]}
+
+Provide a concise, one-sentence "AI Insight" explaining what this actually means for a human operator. Focus on the behavior, not the numbers."""
+
+                    # 2. Call LLM
+                    json_data = {
+                        "model": VLLM_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.1,
+                        "max_tokens": 256
+                    }
+                    resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=30)
+                    
+                    if resp.status_code == 200:
+                        insight = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                        # 3. Store in Redis
+                        self.state.r.set(f"{self.state.KEY_HOST_ANALYSIS_PREFIX}{host_id}", insight, ex=3600) # 1 hour TTL
+                    
+                except Exception as e:
+                    print(f"AI Host Analysis Failed for {host_id}: {e}")
+                
+                self.queue.task_done()
+                await asyncio.sleep(1) # Rate limit
+
+    async def request_analysis(self, host_id, score, reason, log_msg):
+        # Prevent queue flooding
+        if self.queue.qsize() > 50: return
+        await self.queue.put((host_id, score, reason, log_msg))
+
+host_analysis_broker = None # Initialized in startup
 
 class VulnerabilityRequestBroker:
     def __init__(self, cve_cache):
@@ -2494,6 +2555,11 @@ async def get_host_ports_endpoint(host_id: str):
     port_raw = state.r.hgetall(f"morpheus:host:{host_id}:ports")
     return list(port_raw.keys()) if port_raw else []
 
+@app.get("/host/{host_id}/analysis")
+async def get_host_analysis_endpoint(host_id: str):
+    analysis = state.get_host_analysis(host_id)
+    return {"analysis": analysis or "No recent AI analysis available for this host."}
+
 @app.get("/hosts")
 async def get_all_hosts_endpoint():
     return state.get_all_hosts()
@@ -2802,7 +2868,11 @@ async def janitor_worker():
 
 @app.on_event("startup")
 async def startup_event():
+    global host_analysis_broker
     print("🚀 STARTUP: Application starting...")
+    host_analysis_broker = HostAnalysisBroker(state)
+    asyncio.create_task(host_analysis_broker.worker())
+    
     asyncio.create_task(kafka_worker_generic(TOPIC_SECURITY, KAFKA_CONF_SECURITY, "Security", "security"))
     asyncio.create_task(kafka_worker_generic(TOPIC_NETFLOW, KAFKA_CONF_NETFLOW, "Netflow DFP", "netflow"))
     asyncio.create_task(metric_worker())

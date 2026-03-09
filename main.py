@@ -1100,7 +1100,7 @@ class RedisDashboardState:
         all_hosts_list = all_hosts_list[:15000]
 
         return {
-            "metrics": { "eps": 0, "counts": counts, "seen_users": len(user_raw), "seen_hosts": len(system_hosts) },
+            "metrics": { "eps": 0, "counts": counts, "seen_users": len(user_raw), "seen_hosts": len(all_hosts_list) },
             "all_hosts": all_hosts_list,
             "charts": { 
                 "volume": get_list(self.KEY_EPS_HISTORY, limit=60), 

@@ -94,8 +94,8 @@ const HostInventory = ({ data, onHostClick }) => {
   const stats = useMemo(() => {
     return {
         total: hosts.length,
-        critical: hosts.filter(h => h.score > 3).length,
-        healthy: hosts.filter(h => h.score <= 3).length
+        critical: hosts.filter(h => h.score > 3 || h.isC2).length,
+        healthy: hosts.filter(h => h.score <= 3 && !h.isC2).length
     };
   }, [hosts]);
 

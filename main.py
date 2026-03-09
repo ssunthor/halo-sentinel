@@ -591,8 +591,8 @@ class RedisDashboardState:
                 dfp_hosts.append(n)
             except: continue
         
-        # Limit to 5000 hosts for UI stability
-        return sorted(dfp_hosts, key=lambda x: x.get('score', 0), reverse=True)[:5000]
+        # Limit to 15000 hosts for UI stability
+        return sorted(dfp_hosts, key=lambda x: x.get('score', 0), reverse=True)[:15000]
 
     def reset_all(self):
         """
@@ -1081,7 +1081,7 @@ class RedisDashboardState:
         threat_raw = self.r.get(self.KEY_THREAT_SCORE)
         threat_data = json_loads(threat_raw) if threat_raw else None
 
-        # Return full host list for inventory (Capped at 3k for stability)
+        # Return full host list for inventory (Capped for stability)
         # Filtered to only show hosts with active DFP
         all_hosts_list = []
         for n in (anomalous_nodes + internal_nodes + regular_external):
@@ -1089,7 +1089,7 @@ class RedisDashboardState:
                 # Ensure all vital stats are in the inventory objects
                 all_hosts_list.append(n)
         
-        all_hosts_list = all_hosts_list[:3000]
+        all_hosts_list = all_hosts_list[:15000]
 
         return {
             "metrics": { "eps": 0, "counts": counts, "seen_users": len(user_raw), "seen_hosts": len(system_hosts) },

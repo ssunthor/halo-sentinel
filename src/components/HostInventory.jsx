@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, Server, Activity, Shield, Clock, ArrowUpRight, ArrowDownLeft, 
-  ExternalLink, ChevronRight, X, Globe, Zap, BarChart2, Filter, Loader2
+  ExternalLink, ChevronRight, X, Globe, Zap, BarChart2, Filter, Loader2, Sparkles
 } from 'lucide-react';
 
 const getAnomalyColor = (score) => {
@@ -57,7 +57,8 @@ const HostInventory = ({ data, onHostClick }) => {
         security_events: live ? live.security_events : h.security_events || 0,
         category: h.category,
         reason: live ? (live.reason || h.reason) : h.reason,
-        is_internal: h.is_internal
+        is_internal: h.is_internal,
+        has_analysis: live ? live.has_analysis : h.has_analysis
       };
     }).sort((a, b) => b.score - a.score);
   }, [restHosts, data]);
@@ -177,7 +178,10 @@ const HostInventory = ({ data, onHostClick }) => {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-col">
-                        <span className="font-bold text-white group-hover:text-blue-400 transition-colors">{host.name}</span>
+                        <div className="flex items-center gap-2">
+                            <span className="font-bold text-white group-hover:text-blue-400 transition-colors">{host.name}</span>
+                            {host.has_analysis && <Sparkles size={14} className="text-purple-400 animate-pulse" title="AI Analysis Available" />}
+                        </div>
                         <span className="text-xs text-gray-500 font-mono">{host.id}</span>
                       </div>
                     </td>

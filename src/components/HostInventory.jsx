@@ -58,9 +58,16 @@ const HostInventory = ({ data, onHostClick }) => {
         category: h.category,
         reason: live ? (live.reason || h.reason) : h.reason,
         is_internal: h.is_internal,
-        has_analysis: live ? live.has_analysis : h.has_analysis
+        has_analysis: live ? live.has_analysis : h.has_analysis,
+        isC2: (live ? (live.reason || h.reason) : h.reason) === "C2 Server Communication"
       };
-    }).sort((a, b) => b.score - a.score);
+    }).sort((a, b) => {
+      // 1. C2 ALWAYS at top
+      if (a.isC2 && !b.isC2) return -1;
+      if (!a.isC2 && b.isC2) return 1;
+      // 2. Then by score
+      return b.score - a.score;
+    });
   }, [restHosts, data]);
 
   const SourceBadge = ({ sources }) => {
@@ -180,6 +187,11 @@ const HostInventory = ({ data, onHostClick }) => {
                       <div className="flex flex-col">
                         <div className="flex items-center gap-2">
                             <span className="font-bold text-white group-hover:text-blue-400 transition-colors">{host.name}</span>
+                            {host.isC2 && (
+                                <span className="px-1.5 py-0.5 rounded bg-red-900/40 border border-red-500 text-[8px] text-red-400 font-black uppercase animate-pulse">
+                                    C2 Detected
+                                </span>
+                            )}
                             {host.has_analysis && <Sparkles size={14} className="text-purple-400 animate-pulse" title="AI Analysis Available" />}
                         </div>
                         <span className="text-xs text-gray-500 font-mono">{host.id}</span>

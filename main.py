@@ -599,6 +599,15 @@ class RedisDashboardState:
                 dfp_hosts.append(n)
             except: continue
         
+        # EFFICIENCY: Check for analysis existence in batch
+        if dfp_hosts:
+            pipe = self.r.pipeline()
+            for h in dfp_hosts:
+                pipe.exists(f"{self.KEY_HOST_ANALYSIS_PREFIX}{h['id']}")
+            results = pipe.execute()
+            for i, h in enumerate(dfp_hosts):
+                h['has_analysis'] = bool(results[i])
+
         # Limit to 15000 hosts for UI stability
         return sorted(dfp_hosts, key=lambda x: x.get('score', 0), reverse=True)[:15000]
 
@@ -1098,6 +1107,15 @@ class RedisDashboardState:
                 all_hosts_list.append(n)
         
         all_hosts_list = all_hosts_list[:15000]
+
+        # EFFICIENCY: Check for analysis existence in batch
+        if all_hosts_list:
+            pipe = self.r.pipeline()
+            for h in all_hosts_list:
+                pipe.exists(f"{self.KEY_HOST_ANALYSIS_PREFIX}{h['id']}")
+            results = pipe.execute()
+            for i, h in enumerate(all_hosts_list):
+                h['has_analysis'] = bool(results[i])
 
         return {
             "metrics": { "eps": 0, "counts": counts, "seen_users": len(user_raw), "seen_hosts": len(all_hosts_list) },

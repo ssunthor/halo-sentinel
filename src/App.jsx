@@ -3025,6 +3025,7 @@ const HostDetailOverlay = ({ host, onClose, data, onHostClick }) => {
   const [realHistory, setRealHistory] = useState([]);
   const [anomalyLogs, setAnomalyLogs] = useState([]);
   const [realPorts, setRealPorts] = useState([]);
+  const [hostAnalysis, setHostAnalysis] = useState(null);
   const [hoveredPoint, setHoveredPoint] = useState(null);
 
   useEffect(() => {
@@ -3032,11 +3033,11 @@ const HostDetailOverlay = ({ host, onClose, data, onHostClick }) => {
     setHoveredPoint(null); // Reset on host change
     setRealPorts([]); // Reset ports
     setAnomalyLogs([]); // Reset logs
+    setHostAnalysis(null); // Reset analysis
     
     // Fetch real history from API
     const fetchHistory = async () => {
         try {
-            // Use relative path to go through nginx proxy (/api/host/...)
             const response = await fetch(`/api/host/${encodeURIComponent(host.id)}/history`);
             if (response.ok) {
                 const history = await response.json();
@@ -3073,9 +3074,23 @@ const HostDetailOverlay = ({ host, onClose, data, onHostClick }) => {
         }
     };
 
+    // Fetch AI Analysis
+    const fetchHostAnalysis = async () => {
+        try {
+            const response = await fetch(`/api/host/${encodeURIComponent(host.id)}/analysis`);
+            if (response.ok) {
+                const result = await response.json();
+                setHostAnalysis(result.analysis);
+            }
+        } catch (e) {
+            console.error("Failed to fetch host analysis:", e);
+        }
+    };
+
     fetchHistory();
     fetchPorts();
     fetchAnomalyLogs();
+    fetchHostAnalysis();
   }, [host]);
 
   // Use the hovered point's reason, or fallback to the host's current reason
@@ -3189,6 +3204,22 @@ const HostDetailOverlay = ({ host, onClose, data, onHostClick }) => {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+          {/* AI Behavioral Insight (New) */}
+          {host.score > 0 && (
+            <div className="bg-purple-500/10 border border-purple-500/20 p-4 rounded-lg animate-in fade-in slide-in-from-top-2 duration-700">
+              <div className="text-[10px] uppercase font-bold text-purple-400 mb-2 flex items-center gap-2">
+                <Sparkles size={12} className="animate-pulse" /> AI Behavioral Insight
+              </div>
+              <div className="text-sm text-gray-100 leading-relaxed font-medium">
+                {hostAnalysis || (
+                  <div className="flex items-center gap-2 text-gray-500 italic">
+                    <Loader2 size={12} className="animate-spin" /> Synthesizing behavioral data...
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {activeScore > 0 && activeReason && (
             <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-lg">
               <div className="text-[10px] uppercase font-bold text-red-500 mb-1 flex items-center justify-between">

@@ -1099,10 +1099,14 @@ class RedisDashboardState:
         threat_data = json_loads(threat_raw) if threat_raw else None
 
         # Return full host list for inventory (Capped for stability)
-        # Filtered to only show hosts with active DFP
+        # Filtered to show managed assets (Anomalies, DFP, or Firewalls)
         all_hosts_list = []
         for n in (anomalous_nodes + internal_nodes + regular_external):
-            if n.get('score', 0) > 0 or 'netflow' in n.get('sources', []) or 'netflow_v9' in n.get('sources', []):
+            score = n.get('score', 0)
+            sources = n.get('sources', [])
+            is_firewall = n.get('category') == 'Firewall'
+            
+            if score > 0 or 'netflow' in sources or 'netflow_v9' in sources or is_firewall:
                 # Ensure all vital stats are in the inventory objects
                 all_hosts_list.append(n)
         
@@ -1730,6 +1734,13 @@ def process_log_into_batch(raw_bytes, batch):
     lower_msg = raw_msg.lower()
     enriched_data = {}
     
+    # --- FTD HOSTNAME EXTRACTION ---
+    # Example: <14>Mar 10 18:51:16 10.151.0.6 Unknown - USNYHFPFW06 %FTD-1-430003
+    if "%FTD" in raw_msg:
+        ftd_host_match = re.search(r"-\s+([A-Z0-9_\-]+)\s+%FTD", raw_msg)
+        if ftd_host_match:
+            hostname = ftd_host_match.group(1)
+
     is_sec = "SECURITY" in main_label and "NON_SECURITY" not in main_label
     if not is_sec:
         if "denied" in lower_msg or "block" in lower_msg: is_sec = True
@@ -1909,30 +1920,22 @@ def process_log_into_batch(raw_bytes, batch):
             src_is_ext = not is_rfc1918(src)
             dst_is_ext = not is_rfc1918(dst)
 
-            if ltype == 'block': 
-                batch.topo_links[key]['type'] = 'block'
-                # If source is external and blocked, it's an attack
-                if src_is_ext:
-                    src_geo = get_geoip(src)
-                    if src_geo:
-                        if src_geo.get('country'):
-                            batch.add_attack_country_stat(src_geo['country'])
-                        src_geo['action'] = 'block'
-                        batch.update_map(src, src_geo)
-            else:
-                # For allow involving external IPs, sample 1% for mapping
-                if (src_is_ext or dst_is_ext) and random.random() < 0.01:
-                    ext_ip = src if src_is_ext else dst
-                    geo = get_geoip(ext_ip)
+            # Map PLOTTING (High fidelity for blocks, sampled for allow)
+            ext_ip_to_map = src if src_is_ext else (dst if dst_is_ext else None)
+            if ext_ip_to_map:
+                if ltype == 'block' or random.random() < 0.05:
+                    geo = get_geoip(ext_ip_to_map)
                     if geo:
-                        geo['action'] = 'allow'
-                        batch.update_map(ext_ip, geo)
-            
+                        geo['action'] = ltype
+                        batch.update_map(ext_ip_to_map, geo)
+                        if ltype == 'block' and src_is_ext:
+                            if geo.get('country'):
+                                batch.add_attack_country_stat(geo['country'])
+
             batch.update_topo_node(src, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
             batch.update_topo_node(dst, {'type': 'dst', 'sources': {'syslog'}, 'val': 1})
 
-            # --- DESTINATION ENRICHMENT ---
-            # Map ALL destinations (lru_cache makes this safe)
+            # --- DESTINATION ENRICHMENT (For External Traffic) ---
             if dst_is_ext:
                 dst_geo = get_geoip(dst)
                 if dst_geo:

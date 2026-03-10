@@ -1600,6 +1600,7 @@ def process_log_into_batch(raw_bytes, batch):
             if not anomaly_deduplicator.is_duplicate(anomaly_key):
                 batch.add_anomaly_entry(clean_host, score, str(cause), f"Port: {real_dport}, Bytes: {bytes_val:.0f}")
                 # AI ANALYSIS TRIGGER: Queue background analysis for this host
+                # (Priority logic is inside HostAnalysisBroker.request_analysis)
                 batch.add_analysis_request(clean_host, score, str(cause), raw_msg or str(payload))
 
         # --- THREAT STATS (Network) ---
@@ -1872,6 +1873,7 @@ def process_log_into_batch(raw_bytes, batch):
                 if not anomaly_deduplicator.is_duplicate(anomaly_key):
                     batch.add_anomaly_entry(hostname, sys_anomaly_score, anomaly_cause, raw_msg[:200])
                     # AI ANALYSIS TRIGGER: Queue background analysis
+                    # (Priority logic is inside HostAnalysisBroker.request_analysis)
                     batch.add_analysis_request(hostname, sys_anomaly_score, anomaly_cause, raw_msg)
         else:
             batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
@@ -2197,7 +2199,7 @@ class HostAnalysisBroker:
     def __init__(self, state):
         self.queue = asyncio.Queue()
         self.state = state
-        self.analyzed_hosts = {} # Cache within the process to prevent duplicate simultaneous requests
+        self.cooldown_prefix = "morpheus:analysis:cooldown:"
 
     async def worker(self):
         print("🤖 AI: Host Anomaly Analysis worker started...")
@@ -2217,7 +2219,8 @@ Provide a concise, one-sentence "AI Insight" explaining what this actually means
                     # 2. Call LLM
                     json_data = {
                         "model": VLLM_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
+                        "messages": [{"role": "system", "content": "You are a senior security analyst providing concise insights."},
+                                     {"role": "user", "content": prompt}],
                         "temperature": 0.1,
                         "max_tokens": 256
                     }
@@ -2225,18 +2228,29 @@ Provide a concise, one-sentence "AI Insight" explaining what this actually means
                     
                     if resp.status_code == 200:
                         insight = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                        # 3. Store in Redis
-                        self.state.r.set(f"{self.state.KEY_HOST_ANALYSIS_PREFIX}{host_id}", insight, ex=3600) # 1 hour TTL
+                        # 3. Store in Redis with 24 hour TTL for "retention"
+                        self.state.r.set(f"{self.state.KEY_HOST_ANALYSIS_PREFIX}{host_id}", insight, ex=86400)
+                        print(f"🤖 AI: Analysis completed and retained for {host_id} (Score: {score:.2f})")
                     
                 except Exception as e:
                     print(f"AI Host Analysis Failed for {host_id}: {e}")
                 
                 self.queue.task_done()
-                await asyncio.sleep(1) # Rate limit
+                await asyncio.sleep(0.5) # Slightly faster processing
 
     async def request_analysis(self, host_id, score, reason, log_msg):
-        # Prevent queue flooding
-        if self.queue.qsize() > 50: return
+        # 1. Check Cooldown (Don't analyze the same host more than once every 10 mins)
+        cooldown_key = f"{self.cooldown_prefix}{host_id}"
+        if self.state.r.exists(cooldown_key):
+            return
+
+        # 2. Priority check: Always allow high scores (> 5.0) to enter the queue
+        # Otherwise cap the queue at 200 to prevent OOM
+        if score <= 5.0 and self.queue.qsize() > 200:
+            return
+
+        # 3. Set Cooldown and Queue
+        self.state.r.set(cooldown_key, "1", ex=600) # 10 minute cooldown
         await self.queue.put((host_id, score, reason, log_msg))
 
 host_analysis_broker = None # Initialized in startup

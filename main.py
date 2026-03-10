@@ -1346,8 +1346,13 @@ def parse_log_entry(raw_bytes):
                 break
 
     # Update Counts
-    if "FAILURE" in main_label.upper(): updates['counts']['auth_fail'] += 1
-    elif "SUCCESS" in main_label.upper(): updates['counts']['logons'] += 1
+    is_auth_fail = "FAILURE" in main_label_upper or any(k in lower_msg for k in ["failed", "invalid password", "invalid user", "authentication failure", "failed password", "denied"])
+    is_logon = "SUCCESS" in main_label_upper or any(k in lower_msg for k in ["accepted password", "accepted publickey", "session opened", "new logon"])
+
+    if is_auth_fail and (category == "Authentication" or "user" in lower_msg):
+        updates['counts']['auth_fail'] += 1
+    elif is_logon and (category == "Authentication" or "user" in lower_msg):
+        updates['counts']['logons'] += 1
     
     if 'sudo' in lower_msg:
         updates['counts']['sudo'] += 1
@@ -1761,10 +1766,14 @@ def process_log_into_batch(raw_bytes, batch):
         is_sec = False
 
     # COUNTS
-    if "FAILURE" in main_label.upper(): 
+    is_auth_fail = "FAILURE" in main_label_upper or any(k in lower_msg for k in ["failed", "invalid password", "invalid user", "authentication failure", "failed password", "denied"])
+    is_logon = "SUCCESS" in main_label_upper or any(k in lower_msg for k in ["accepted password", "accepted publickey", "session opened", "new logon"])
+
+    if is_auth_fail and (category == "Authentication" or "user" in lower_msg): 
         batch.counts['auth_fail'] += 1
         batch.inc_threat_stat('auth_fail', 1.0)
-    elif "SUCCESS" in main_label.upper(): batch.counts['logons'] += 1
+    elif is_logon and (category == "Authentication" or "user" in lower_msg):
+        batch.counts['logons'] += 1
     
     if category == "Firewall":
         batch.counts['firewall_block'] += 1

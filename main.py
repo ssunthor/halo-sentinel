@@ -1887,55 +1887,74 @@ def process_log_into_batch(raw_bytes, batch):
         if src_match and dst_match:
             src = src_match.group(1)
             dst = dst_match.group(1)
-            ltype = "block" if ("block" in lower_msg or "deny" in lower_msg) else "allow"
+            
+            # Action logic: FTD uses 'AccessControlRuleAction: Allow' or 'Deny'
+            ltype = "allow"
+            if any(k in lower_msg for k in ["deny", "denied", "block", "blocked"]):
+                ltype = "block"
             
             key = f"{src}-{dst}"
             batch.topo_links[key]['val'] += 1
+            
+            # --- IP IDENTITY & STATS ---
+            def is_rfc1918(ip):
+                try:
+                    if ip.startswith("10.") or ip.startswith("192.168."): return True
+                    if ip.startswith("172."):
+                        parts = ip.split(".")
+                        if len(parts) > 1 and 16 <= int(parts[1]) <= 31: return True
+                    return False
+                except: return False
+
+            src_is_ext = not is_rfc1918(src)
+            dst_is_ext = not is_rfc1918(dst)
+
             if ltype == 'block': 
                 batch.topo_links[key]['type'] = 'block'
-                
-                # --- ATTACK COUNTRY TRACKING ---
-                # Now that we have lru_cache, we can map ALL blocks for high fidelity
-                src_geo = get_geoip(src)
-                if src_geo:
-                    if src_geo.get('country'):
-                        batch.add_attack_country_stat(src_geo['country'])
-                    src_geo['action'] = 'block'
-                    batch.update_map(src, src_geo)
-            else:
-                if random.random() < 0.01: # Sample 1% for ALLOW traffic
+                # If source is external and blocked, it's an attack
+                if src_is_ext:
                     src_geo = get_geoip(src)
                     if src_geo:
-                        src_geo['action'] = 'allow'
+                        if src_geo.get('country'):
+                            batch.add_attack_country_stat(src_geo['country'])
+                        src_geo['action'] = 'block'
                         batch.update_map(src, src_geo)
+            else:
+                # For allow involving external IPs, sample 1% for mapping
+                if (src_is_ext or dst_is_ext) and random.random() < 0.01:
+                    ext_ip = src if src_is_ext else dst
+                    geo = get_geoip(ext_ip)
+                    if geo:
+                        geo['action'] = 'allow'
+                        batch.update_map(ext_ip, geo)
             
             batch.update_topo_node(src, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
             batch.update_topo_node(dst, {'type': 'dst', 'sources': {'syslog'}, 'val': 1})
 
             # --- DESTINATION ENRICHMENT ---
             # Map ALL destinations (lru_cache makes this safe)
-            dst_geo = get_geoip(dst)
-            if dst_geo:
-                dst_geo['time'] = timestamp_str
-                dst_geo['src_ip'] = src
-                
-                try:
-                    sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)
-                    dp_match = re.search(r"DstPort\s*:\s*(\d+)", raw_msg, re.I)
-                    dst_geo['src_port'] = sp_match.group(1) if sp_match else "0"
-                    dst_geo['dst_port'] = dp_match.group(1) if dp_match else "0"
-                except:
-                    dst_geo['src_port'] = "0"
-                    dst_geo['dst_port'] = "0"
-                
-                asn_info = get_asn(dst)
-                if asn_info:
-                    dst_geo.update(asn_info)
+            if dst_is_ext:
+                dst_geo = get_geoip(dst)
+                if dst_geo:
+                    dst_geo['time'] = timestamp_str
+                    dst_geo['src_ip'] = src
+                    
+                    try:
+                        sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)
+                        dp_match = re.search(r"DstPort\s*:\s*(\d+)", raw_msg, re.I)
+                        dst_geo['src_port'] = sp_match.group(1) if sp_match else "0"
+                        dst_geo['dst_port'] = dp_match.group(1) if dp_match else "0"
+                    except:
+                        dst_geo['src_port'] = "0"
+                        dst_geo['dst_port'] = "0"
+                    
+                    asn_info = get_asn(dst)
+                    if asn_info: dst_geo.update(asn_info)
 
-                batch.add_destination(dst_geo)
-                if dst_geo.get('country'):
-                    batch.add_country_stat(dst_geo['country'])
-                enriched_data = dst_geo
+                    batch.add_destination(dst_geo)
+                    if dst_geo.get('country'):
+                        batch.add_country_stat(dst_geo['country'])
+                    enriched_data = dst_geo
 
     # LOG ENTRY (Separate Firewalls from System Logs)
     log_key = state.KEY_FIREWALL_LOGS if category == "Firewall" else state.KEY_LOGS

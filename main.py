@@ -1516,8 +1516,23 @@ def process_log_into_batch(raw_bytes, batch):
         
         # Traffic info
         try:
-            real_dport = int(payload.get("dst_port") or 0)
-            real_sport = int(payload.get("src_port") or 0)
+            raw_dport = int(payload.get("dst_port") or 0)
+            raw_sport = int(payload.get("src_port") or 0)
+            
+            # --- SERVICE PORT LOGIC ---
+            # In Netflow, we often see both directions.
+            # If sport is a service port (e.g. 443) and dport is high (e.g. 54321), 
+            # then sport is the "real" port we care about for the service.
+            if raw_sport < 1024 and raw_dport > 1024:
+                real_port = raw_sport
+            elif raw_dport < 1024 and raw_sport > 1024:
+                real_port = raw_dport
+            else:
+                # Default to destination if both are high or both are low
+                real_port = raw_dport or raw_sport
+                
+            real_dport = real_port # Use for visualization
+            real_sport = raw_sport # Keep for log detail
         except (ValueError, TypeError):
             real_dport = 0
             real_sport = 0

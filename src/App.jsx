@@ -253,8 +253,8 @@ const parseFirewallData = (msg) => {
 };
 
 const getAnomalyColor = (score) => {
-  if (score <= 2) return THEME.green;
-  if (score <= 5) return THEME.orange;
+  if (score < 3) return THEME.green;
+  if (score < 6) return THEME.orange;
   return THEME.red;
 };
 
@@ -545,8 +545,8 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     let color = THEME.blue; 
     let glowColor = 'rgba(59, 130, 246, 0.3)';
 
-    if (node.score > 5) { color = THEME.red; glowColor = 'rgba(239, 68, 68, 0.5)'; } 
-    else if (node.score > 2) { color = THEME.orange; glowColor = 'rgba(249, 115, 22, 0.5)'; }
+    if (node.score >= 6) { color = THEME.red; glowColor = 'rgba(239, 68, 68, 0.5)'; } 
+    else if (node.score >= 3) { color = THEME.orange; glowColor = 'rgba(249, 115, 22, 0.5)'; }
     else if (node.type === 'src') { color = THEME.green; glowColor = 'rgba(0, 208, 101, 0.3)'; }
 
     // Glow
@@ -800,8 +800,8 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         
         // --- 3D NODE STYLING (Matched to 2D) ---
         nodeColor={node => {
-            if (node.score > 5) return THEME.red;
-            if (node.score > 2) return THEME.orange;
+            if (node.score >= 6) return THEME.red;
+            if (node.score >= 3) return THEME.orange;
             if (node.type === 'src') return THEME.green;
             return THEME.blue;
         }}
@@ -822,11 +822,11 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             // 2. Check if label should be visible (Importance check)
             // Always show if it's the selected node itself
             const isSelectedTarget = selectedNode && selectedNode.id === node.id;
-            // Otherwise obey standard rules: Toggle ON or Score > 2
-            if (!showLabels && node.score < 2 && !isSelectedTarget) return null;
+            // Otherwise obey standard rules: Toggle ON or Score >= 3
+            if (!showLabels && node.score < 3 && !isSelectedTarget) return null;
             
             const sprite = new SpriteText(node.name || node.id);
-            sprite.color = node.score > 5 ? '#ffaaaa' : '#e0e0e0';
+            sprite.color = node.score >= 6 ? '#ffaaaa' : '#e0e0e0';
             sprite.textHeight = 8; // Fixed height
             sprite.position.y = 8; // Offset above node
             return sprite;

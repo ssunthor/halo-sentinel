@@ -5,8 +5,8 @@ import {
 } from 'lucide-react';
 
 const getAnomalyColor = (score) => {
-  if (score <= 2) return "#00D065"; // THEME.green
-  if (score <= 5) return "#f97316"; // THEME.orange
+  if (score < 3) return "#00D065"; // THEME.green
+  if (score < 6) return "#f97316"; // THEME.orange
   return "#ef4444"; // THEME.red
 };
 
@@ -94,8 +94,8 @@ const HostInventory = ({ data, onHostClick }) => {
   const stats = useMemo(() => {
     return {
         total: hosts.length,
-        critical: hosts.filter(h => h.score > 3 || h.isC2).length,
-        healthy: hosts.filter(h => h.score <= 3 && !h.isC2).length
+        critical: hosts.filter(h => h.score >= 3 || h.isC2).length,
+        healthy: hosts.filter(h => h.score < 3 && !h.isC2).length
     };
   }, [hosts]);
 
@@ -112,14 +112,14 @@ const HostInventory = ({ data, onHostClick }) => {
           </div>
           <div className="bg-[#121212] border border-red-900/30 p-4 rounded-lg shadow-lg flex items-center justify-between">
               <div>
-                  <p className="text-[10px] font-bold text-red-500/70 uppercase tracking-widest">High Risk (> 3.0)</p>
+                  <p className="text-[10px] font-bold text-red-500/70 uppercase tracking-widest">High Risk (≥ 3.0)</p>
                   <p className="text-2xl font-black text-red-500">{stats.critical}</p>
               </div>
               <Shield className="text-red-500 opacity-20" size={32} />
           </div>
           <div className="bg-[#121212] border border-green-900/30 p-4 rounded-lg shadow-lg flex items-center justify-between">
               <div>
-                  <p className="text-[10px] font-bold text-green-500/70 uppercase tracking-widest">Healthy/Low Risk (≤ 3.0)</p>
+                  <p className="text-[10px] font-bold text-green-500/70 uppercase tracking-widest">Healthy/Low Risk (&lt; 3.0)</p>
                   <p className="text-2xl font-black text-green-500">{stats.healthy}</p>
               </div>
               <Activity className="text-green-500 opacity-20" size={32} />
@@ -179,8 +179,8 @@ const HostInventory = ({ data, onHostClick }) => {
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${host.score > 5 ? 'bg-red-500 animate-pulse' : host.score > 2 ? 'bg-orange-500' : 'bg-green-500'}`}></div>
-                        <span className="text-[10px] font-bold text-gray-500 uppercase">{host.score > 5 ? 'Critical' : host.score > 2 ? 'Warning' : 'Healthy'}</span>
+                        <div className={`w-2 h-2 rounded-full ${host.score >= 6 ? 'bg-red-500 animate-pulse' : host.score >= 3 ? 'bg-orange-500' : 'bg-green-500'}`}></div>
+                        <span className="text-[10px] font-bold text-gray-500 uppercase">{host.score >= 6 ? 'Critical' : host.score >= 3 ? 'Warning' : 'Healthy'}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4">

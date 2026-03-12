@@ -423,8 +423,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   const [showAllowed, setShowAllowed] = useState(true); 
   const [showBlocked, setShowBlocked] = useState(true); 
   const [expansion, setExpansion] = useState(1.0); // Expansion factor (1.0 = default)
-  const [filterFirewalls, setFilterFirewalls] = useState(false); // New: Noise reduction
-  const [filterExternal, setFilterExternal] = useState(false); // New: Noise reduction
 
   const nodesById = useRef(new Map());
   const linksById = useRef(new Map());
@@ -570,11 +568,9 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         ctx.beginPath(); ctx.arc(node.x, node.y, baseRadius + 2, 0, 2 * Math.PI, false); ctx.strokeStyle = color; ctx.lineWidth = 0.5; ctx.stroke();
     }
     
-    // Labels: Dramatically reduced clutter
+    // Labels
     const isTarget = node.id.toLowerCase().includes(searchTerm.toLowerCase()) && searchTerm.length > 1;
-    const isCritical = node.score >= 6;
-    
-    if (showLabels || globalScale > 2.5 || isCritical || isTarget) {
+    if (showLabels || globalScale > 2.5 || node.score > 2 || isTarget) {
       const label = node.name || node.id;
       const fontSize = isTarget ? 14 / globalScale : 10 / globalScale; 
       
@@ -613,21 +609,15 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     }
 
     const visibleNodeIds = new Set();
-
-    // --- NOISE REDUCTION FILTERS ---
+    
+    // --- FILTER EXTERNAL NOISE ---
     let galaxyNodes = data.nodes;
     if (!showExternal) {
+        // Only keep internal nodes or nodes with some anomaly score
         galaxyNodes = data.nodes.filter(n => n.is_internal || (n.score && n.score > 0));
     }
     
-    // Additional granular filters
-    if (filterFirewalls) {
-        galaxyNodes = galaxyNodes.filter(n => n.category !== 'Firewall');
-    }
-    if (filterExternal) {
-        galaxyNodes = galaxyNodes.filter(n => n.is_internal || n.type === 'src');
-    }
-    
+    // Links must connect visible nodes
     const validIds = new Set(galaxyNodes.map(n => n.id));
     activeLinks = activeLinks.filter(l => {
         const s = typeof l.source === 'object' ? l.source.id : l.source;
@@ -688,7 +678,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     for (const id of linksById.current.keys()) { if (!currentLinkIds.has(id)) linksById.current.delete(id); }
 
     setGraphData({ nodes: newNodes, links: newLinks });
-  }, [data, showBlocked, showAllowed, selectedDc, searchTerm, showExternal, performanceMode, selectedNode, isPaused, filterFirewalls, filterExternal, expansion]);
+  }, [data]);
 
   return (
     <div 
@@ -766,16 +756,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             {showExternal ? 'DENSITY: HIGH' : 'DENSITY: LOW'}
          </button>
 
-         <button onClick={() => setFilterFirewalls(!filterFirewalls)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${filterFirewalls ? 'bg-orange-900/40 text-orange-400 border-orange-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
-            <Ban size={14} />
-            {filterFirewalls ? 'FW: HIDDEN' : 'FW: VISIBLE'}
-         </button>
-
-         <button onClick={() => setFilterExternal(!filterExternal)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${filterExternal ? 'bg-blue-900/40 text-blue-400 border-blue-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
-            <GlobeIcon size={14} />
-            {filterExternal ? 'EXT: HIDDEN' : 'EXT: VISIBLE'}
-         </button>
-
          <button onClick={() => setPerformanceMode(!performanceMode)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${performanceMode ? 'bg-green-900/40 text-green-400 border-green-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
             <Activity size={14} className={performanceMode ? 'animate-pulse' : ''} />
             {performanceMode ? 'PERF: ON' : 'PERF: OFF'}
@@ -842,12 +822,11 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             // 2. Check if label should be visible (Importance check)
             // Always show if it's the selected node itself
             const isSelectedTarget = selectedNode && selectedNode.id === node.id;
-            const isCritical = node.score >= 6;
-            // Otherwise obey standard rules: Toggle ON or Critical
-            if (!showLabels && !isCritical && !isSelectedTarget) return null;
+            // Otherwise obey standard rules: Toggle ON or Score >= 3
+            if (!showLabels && node.score < 3 && !isSelectedTarget) return null;
             
             const sprite = new SpriteText(node.name || node.id);
-            sprite.color = isCritical ? '#ffaaaa' : '#e0e0e0';
+            sprite.color = node.score >= 6 ? '#ffaaaa' : '#e0e0e0';
             sprite.textHeight = 8; // Fixed height
             sprite.position.y = 8; // Offset above node
             return sprite;

@@ -411,7 +411,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   const [tooltipNode, setTooltipNode] = useState(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [selectedNode, setSelectedNode] = useState(null);
-  const [showTop10Only, setShowTop10Only] = useState(false);
+  const [showTop10Only, setShowTop10Only] = useState(true);
   
   // DEFAULT DIMENSIONS (Fallback to prevent 0x0)
   const [dimensions, setDimensions] = useState({ 

@@ -419,6 +419,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   });
   
   const [expansion, setExpansion] = useState(1.0); // Expansion factor (1.0 = default)
+  const [minScoreFilter, setMinScoreFilter] = useState(8); 
 
   const nodesById = useRef(new Map());
   const linksById = useRef(new Map());
@@ -556,7 +557,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     
     // Labels
     const isTarget = node.id.toLowerCase().includes(searchTerm.toLowerCase()) && searchTerm.length > 1;
-    if (showLabels || globalScale > 2.5 || node.score > 2 || isTarget) {
+    if (showLabels || globalScale > 2.5 || node.score >= minScoreFilter || isTarget) {
       const label = node.name || node.id;
       const fontSize = isTarget ? 14 / globalScale : 10 / globalScale; 
       
@@ -711,6 +712,21 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             {searchTerm && <button onClick={() => setSearchTerm('')} className="absolute right-2 top-1.5 text-gray-500 hover:text-white"><X size={14}/></button>}
          </div>
 
+         <div className="relative group">
+            <select 
+                className="bg-gray-900 border border-gray-600 rounded pl-2 pr-8 py-1.5 text-xs text-white focus:border-green-500 focus:outline-none shadow-xl appearance-none cursor-pointer hover:bg-gray-800"
+                value={minScoreFilter} 
+                onChange={(e) => setMinScoreFilter(parseInt(e.target.value))}
+            >
+                {[1,2,3,4,5,6,7,8,9,10].map(num => (
+                    <option key={num} value={num}>Score ≥ {num}</option>
+                ))}
+            </select>
+            <div className="absolute right-2 top-2 pointer-events-none text-gray-400">
+                <ChevronDown size={12} />
+            </div>
+         </div>
+
          <button onClick={() => setShowExternal(!showExternal)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${showExternal ? 'bg-purple-900/40 text-purple-400 border-purple-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
             <Sparkles size={14} className={showExternal ? 'animate-pulse' : ''} />
             {showExternal ? 'DENSITY: HIGH' : 'DENSITY: LOW'}
@@ -782,8 +798,8 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             // 2. Check if label should be visible (Importance check)
             // Always show if it's the selected node itself
             const isSelectedTarget = selectedNode && selectedNode.id === node.id;
-            // Otherwise obey standard rules: Toggle ON or Score >= 3
-            if (!showLabels && node.score < 3 && !isSelectedTarget) return null;
+            // Otherwise obey standard rules: Toggle ON or Score >= filter
+            if (!showLabels && node.score < minScoreFilter && !isSelectedTarget) return null;
             
             const sprite = new SpriteText(node.name || node.id);
             sprite.color = node.score >= 6 ? '#ffaaaa' : '#e0e0e0';

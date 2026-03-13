@@ -420,6 +420,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   
   const [expansion, setExpansion] = useState(1.0); // Expansion factor (1.0 = default)
   const [minScoreFilter, setMinScoreFilter] = useState(8); 
+  const [maxScoreFilter, setMaxScoreFilter] = useState(10); 
 
   const nodesById = useRef(new Map());
   const linksById = useRef(new Map());
@@ -530,14 +531,14 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
 
       // 2. Check if label should be visible (Importance check)
       const isSelectedTarget = selectedNode && selectedNode.id === node.id;
-      if (!showLabels && node.score < minScoreFilter && !isSelectedTarget) return null;
+      if (!showLabels && (node.score < minScoreFilter || node.score > maxScoreFilter) && !isSelectedTarget) return null;
       
       const sprite = new SpriteText(node.name || node.id);
       sprite.color = node.score >= 6 ? '#ffaaaa' : '#e0e0e0';
       sprite.textHeight = 8; 
       sprite.position.y = 8; 
       return sprite;
-  }, [activeIds, selectedNode, showLabels, minScoreFilter]);
+  }, [activeIds, selectedNode, showLabels, minScoreFilter, maxScoreFilter]);
 
   // 5. PAINT ENGINE (Crash Proof) - RESTORED FOR 2D
   const paintNode = React.useCallback((node, ctx, globalScale) => {
@@ -574,7 +575,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     
     // Labels
     const isTarget = node.id.toLowerCase().includes(searchTerm.toLowerCase()) && searchTerm.length > 1;
-    if (showLabels || node.score >= minScoreFilter || isTarget) {
+    if (showLabels || (node.score >= minScoreFilter && node.score <= maxScoreFilter) || isTarget) {
       const label = node.name || node.id;
       const fontSize = isTarget ? 14 / globalScale : 10 / globalScale; 
       
@@ -586,7 +587,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         ctx.fillStyle = node.score > 5 ? '#ffaaaa' : '#e0e0e0'; ctx.fillText(label, node.x, node.y + baseRadius + 2);
       }
     }
-  }, [showLabels, searchTerm, minScoreFilter]); 
+  }, [showLabels, searchTerm, minScoreFilter, maxScoreFilter]); 
 
   // 6. DATA PROCESSING
   useEffect(() => {
@@ -737,6 +738,21 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             >
                 {[1,2,3,4,5,6,7,8,9,10].map(num => (
                     <option key={num} value={num}>Score ≥ {num}</option>
+                ))}
+            </select>
+            <div className="absolute right-2 top-2 pointer-events-none text-gray-400">
+                <ChevronDown size={12} />
+            </div>
+         </div>
+
+         <div className="relative group">
+            <select 
+                className="bg-gray-900 border border-gray-600 rounded pl-2 pr-8 py-1.5 text-xs text-white focus:border-green-500 focus:outline-none shadow-xl appearance-none cursor-pointer hover:bg-gray-800"
+                value={maxScoreFilter} 
+                onChange={(e) => setMaxScoreFilter(parseInt(e.target.value))}
+            >
+                {[1,2,3,4,5,6,7,8,9,10].map(num => (
+                    <option key={num} value={num}>Score ≤ {num}</option>
                 ))}
             </select>
             <div className="absolute right-2 top-2 pointer-events-none text-gray-400">

@@ -10,7 +10,7 @@ import {
   ChevronRight, ChevronLeft, ChevronDown, Monitor, Clock, Filter, Search, X, ShieldAlert, ShieldCheck,
   Play, Pause, ArrowRight, Ban, FileText, MousePointerClick, PieChart as PieIcon, BarChart2, Zap, Share2,
   Fingerprint, Info, RefreshCw, Orbit, Aperture, Sparkles, Loader2,
-  ArrowUpRight, ArrowDownLeft, ExternalLink, Download, Box, Building2, Disc, History
+  ArrowUpRight, ArrowDownLeft, ExternalLink, Download, Box, Building2, Disc, History, TrendingUp
 } from 'lucide-react';
 import Globe from 'react-globe.gl';
 import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup, Line } from "react-simple-maps";
@@ -411,6 +411,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   const [tooltipNode, setTooltipNode] = useState(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [selectedNode, setSelectedNode] = useState(null);
+  const [showTop10Only, setShowTop10Only] = useState(false);
   
   // DEFAULT DIMENSIONS (Fallback to prevent 0x0)
   const [dimensions, setDimensions] = useState({ 
@@ -616,6 +617,17 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         // Only keep internal nodes or nodes with some anomaly score
         galaxyNodes = data.nodes.filter(n => n.is_internal || (n.score && n.score > 0));
     }
+
+    // --- TOP 10 FILTER ---
+    if (showTop10Only) {
+        const top10Ids = new Set(
+            [...galaxyNodes]
+                .sort((a, b) => (b.score || 0) - (a.score || 0))
+                .slice(0, 10)
+                .map(n => n.id)
+        );
+        galaxyNodes = galaxyNodes.filter(n => top10Ids.has(n.id) || (n.score || 0) <= 6);
+    }
     
     // Links must connect visible nodes
     const validIds = new Set(galaxyNodes.map(n => n.id));
@@ -767,6 +779,11 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
          <button onClick={() => setShowExternal(!showExternal)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${showExternal ? 'bg-purple-900/40 text-purple-400 border-purple-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
             <Sparkles size={14} className={showExternal ? 'animate-pulse' : ''} />
             {showExternal ? 'DENSITY: HIGH' : 'DENSITY: LOW'}
+         </button>
+
+         <button onClick={() => setShowTop10Only(!showTop10Only)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${showTop10Only ? 'bg-red-900/40 text-red-400 border-red-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>
+            <TrendingUp size={14} className={showTop10Only ? 'animate-pulse' : ''} />
+            {showTop10Only ? 'TOP 10: ON' : 'TOP 10: OFF'}
          </button>
 
          <button onClick={() => setPerformanceMode(!performanceMode)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${performanceMode ? 'bg-green-900/40 text-green-400 border-green-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>

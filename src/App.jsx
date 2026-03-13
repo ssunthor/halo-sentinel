@@ -404,7 +404,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   
   // --- STATE ---
   const [isPaused, setIsPaused] = useState(false);
-  const [showLabels, setShowLabels] = useState(false); 
+  const [labelMode, setLabelMode] = useState('anomalies'); 
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState('2D'); // '2D' or '3D'
   const [showWireframe, setShowWireframe] = useState(false);
@@ -530,15 +530,17 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
       if (!isActive) return null;
 
       // 2. Check if label should be visible (Importance check)
-      const isSelectedTarget = selectedNode && selectedNode.id === node.id;
-      if (!showLabels && (node.score < minScoreFilter || node.score > maxScoreFilter) && !isSelectedTarget) return null;
+      const isSelectedTarget = (selectedNode && selectedNode.id === node.id) || (node.id.toLowerCase().includes(searchTerm.toLowerCase()) && searchTerm.length > 1);
+      const showThisLabel = labelMode === 'all' || (labelMode === 'anomalies' && (node.score >= minScoreFilter && node.score <= maxScoreFilter)) || isSelectedTarget;
+      
+      if (!showThisLabel) return null;
       
       const sprite = new SpriteText(node.name || node.id);
       sprite.color = node.score >= 6 ? '#ffaaaa' : '#e0e0e0';
       sprite.textHeight = 8; 
       sprite.position.y = 8; 
       return sprite;
-  }, [activeIds, selectedNode, showLabels, minScoreFilter, maxScoreFilter]);
+  }, [activeIds, selectedNode, labelMode, searchTerm, minScoreFilter, maxScoreFilter]);
 
   // 5. PAINT ENGINE (Crash Proof) - RESTORED FOR 2D
   const paintNode = React.useCallback((node, ctx, globalScale) => {
@@ -574,8 +576,10 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     }
     
     // Labels
-    const isTarget = node.id.toLowerCase().includes(searchTerm.toLowerCase()) && searchTerm.length > 1;
-    if (showLabels || (node.score >= minScoreFilter && node.score <= maxScoreFilter) || isTarget) {
+    const isTarget = (selectedNode && selectedNode.id === node.id) || (node.id.toLowerCase().includes(searchTerm.toLowerCase()) && searchTerm.length > 1);
+    const showThisLabel = labelMode === 'all' || (labelMode === 'anomalies' && (node.score >= minScoreFilter && node.score <= maxScoreFilter)) || isTarget;
+
+    if (showThisLabel) {
       const label = node.name || node.id;
       const fontSize = isTarget ? 14 / globalScale : 10 / globalScale; 
       
@@ -587,7 +591,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         ctx.fillStyle = node.score > 5 ? '#ffaaaa' : '#e0e0e0'; ctx.fillText(label, node.x, node.y + baseRadius + 2);
       }
     }
-  }, [showLabels, searchTerm, minScoreFilter, maxScoreFilter]); 
+  }, [labelMode, searchTerm, minScoreFilter, maxScoreFilter, selectedNode]); 
 
   // 6. DATA PROCESSING
   useEffect(() => {
@@ -776,7 +780,21 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
          {viewMode === '3D' && (
             <button onClick={() => setShowWireframe(!showWireframe)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl ${showWireframe ? 'bg-blue-900/40 text-blue-400 border-blue-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}><GlobeIcon size={14}/></button>
          )}
-         <button onClick={() => setShowLabels(!showLabels)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl ${showLabels ? 'bg-gray-700 text-white border-gray-500' : 'bg-gray-800 text-gray-400 border-gray-600'}`}>{showLabels ? "ABC" : "..."}</button>
+         <button 
+            onClick={() => {
+                if (labelMode === 'all') setLabelMode('anomalies');
+                else if (labelMode === 'anomalies') setLabelMode('none');
+                else setLabelMode('all');
+            }} 
+            className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all ${
+                labelMode === 'all' ? 'bg-blue-900/40 text-blue-400 border-blue-500' : 
+                labelMode === 'anomalies' ? 'bg-gray-700 text-white border-gray-500' : 
+                'bg-gray-800 text-gray-500 border-gray-600'
+            }`}
+            title={labelMode === 'all' ? "All Labels" : labelMode === 'anomalies' ? "Anomalies Only" : "Labels Off"}
+         >
+            {labelMode === 'all' ? "ABC" : labelMode === 'anomalies' ? "..." : "OFF"}
+         </button>
          <button onClick={togglePause} className={`p-1.5 rounded border shadow-xl ${isPaused ? 'bg-yellow-500/20 border-yellow-500 text-yellow-500' : 'bg-gray-800 border-gray-600 text-gray-300'}`}>{isPaused ? <Play size={14} /> : <Pause size={14} />}</button>
       </div>
       

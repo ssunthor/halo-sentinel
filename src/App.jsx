@@ -418,10 +418,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
       height: window.innerHeight > 0 ? window.innerHeight / 2 : 600 
   });
   
-  const [selectedDc, setSelectedDc] = useState('all');
-  const [availableSites, setAvailableSites] = useState([]);
-  const [showAllowed, setShowAllowed] = useState(true); 
-  const [showBlocked, setShowBlocked] = useState(true); 
   const [expansion, setExpansion] = useState(1.0); // Expansion factor (1.0 = default)
 
   const nodesById = useRef(new Map());
@@ -442,16 +438,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
       resizeObserver.observe(containerRef.current);
       return () => resizeObserver.disconnect();
   }, []);
-
-  // 2. SITE DISCOVERY
-  useEffect(() => {
-    if (!data || !data.nodes) return;
-    const sites = new Map();
-    data.nodes.forEach(node => {
-        if (node.site && node.site_name) sites.set(node.site, node.site_name);
-    });
-    setAvailableSites(Array.from(sites.entries()).map(([slug, name]) => ({ slug, name })).sort((a, b) => a.name.localeCompare(b.name)));
-  }, [data]);
 
   // 3. PHYSICS ENGINE (Logarithmic Scaling)
   useEffect(() => {
@@ -588,16 +574,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
   useEffect(() => {
     if (!data) return;
 
-    let activeLinks = data.links.filter(l => {
-        if (l.type === 'block' && !showBlocked) return false;
-        if ((l.type !== 'block') && !showAllowed) return false; 
-        return true;
-    });
-
-    if (selectedDc !== 'all') {
-        const dcNodeIds = new Set(data.nodes.filter(n => n.site === selectedDc).map(n => n.id));
-        activeLinks = activeLinks.filter(l => dcNodeIds.has(l.source) || dcNodeIds.has(l.target));
-    }
+    let activeLinks = data.links;
 
     if (searchTerm.trim() !== '') {
         const term = searchTerm.toLowerCase();
@@ -721,17 +698,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
             <span className="text-[9px] font-bold text-gray-500 uppercase">Expanded</span>
          </div>
 
-         <div className="relative group">
-            <select className="bg-gray-900 border border-gray-600 rounded pl-2 pr-8 py-1.5 text-xs text-white focus:border-green-500 focus:outline-none shadow-xl appearance-none cursor-pointer hover:bg-gray-800"
-                value={selectedDc} onChange={(e) => setSelectedDc(e.target.value)}>
-                <option value="all">All Datacenters</option>
-                {availableSites.map((site) => <option key={site.slug} value={site.slug}>{site.name}</option>)}
-            </select>
-            <div className="absolute right-2 top-2 pointer-events-none text-gray-400">
-                <ChevronRight size={12} className="rotate-90" />
-            </div>
-         </div>
-
          {/* --- SEARCH BAR RESTORED --- */}
          <div className="relative group">
             <Search className="absolute left-2 top-1.5 text-gray-500" size={14} />
@@ -743,12 +709,6 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
                 onChange={(e) => setSearchTerm(e.target.value)}
             />
             {searchTerm && <button onClick={() => setSearchTerm('')} className="absolute right-2 top-1.5 text-gray-500 hover:text-white"><X size={14}/></button>}
-         </div>
-
-         <div className="flex rounded border border-gray-600 bg-gray-900 overflow-hidden shadow-xl">
-              <button onClick={() => setShowAllowed(!showAllowed)} className={`px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-2 ${showAllowed ? 'bg-green-900/40 text-green-400' : 'bg-gray-800 text-gray-500'}`}><ShieldCheck size={12}/></button>
-              <div className="w-px bg-gray-600"></div>
-              <button onClick={() => setShowBlocked(!showBlocked)} className={`px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-2 ${showBlocked ? 'bg-red-900/40 text-red-400' : 'bg-gray-800 text-gray-500'}`}><ShieldAlert size={12}/></button>
          </div>
 
          <button onClick={() => setShowExternal(!showExternal)} className={`px-2 py-1.5 rounded border text-xs font-bold shadow-xl transition-all flex items-center gap-2 ${showExternal ? 'bg-purple-900/40 text-purple-400 border-purple-500' : 'bg-gray-800 text-gray-500 border-gray-600'}`}>

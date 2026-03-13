@@ -522,6 +522,23 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
       return [...new Set(neighbors)].slice(0, 10); // Limit to 10
   };
 
+  // 4.5. 3D OBJECTS
+  const nodeThreeObject = useMemo(() => (node) => {
+      // 1. Check if node is part of the active view (filtered)
+      const isActive = !activeIds || activeIds.has(node.id);
+      if (!isActive) return null;
+
+      // 2. Check if label should be visible (Importance check)
+      const isSelectedTarget = selectedNode && selectedNode.id === node.id;
+      if (!showLabels && node.score < minScoreFilter && !isSelectedTarget) return null;
+      
+      const sprite = new SpriteText(node.name || node.id);
+      sprite.color = node.score >= 6 ? '#ffaaaa' : '#e0e0e0';
+      sprite.textHeight = 8; 
+      sprite.position.y = 8; 
+      return sprite;
+  }, [activeIds, selectedNode, showLabels, minScoreFilter]);
+
   // 5. PAINT ENGINE (Crash Proof) - RESTORED FOR 2D
   const paintNode = React.useCallback((node, ctx, globalScale) => {
     if (node.x === undefined || node.y === undefined || Number.isNaN(node.x) || Number.isNaN(node.y)) return;
@@ -557,7 +574,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
     
     // Labels
     const isTarget = node.id.toLowerCase().includes(searchTerm.toLowerCase()) && searchTerm.length > 1;
-    if (showLabels || globalScale > 2.5 || node.score >= minScoreFilter || isTarget) {
+    if (showLabels || node.score >= minScoreFilter || isTarget) {
       const label = node.name || node.id;
       const fontSize = isTarget ? 14 / globalScale : 10 / globalScale; 
       
@@ -569,7 +586,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
         ctx.fillStyle = node.score > 5 ? '#ffaaaa' : '#e0e0e0'; ctx.fillText(label, node.x, node.y + baseRadius + 2);
       }
     }
-  }, [showLabels, searchTerm]); 
+  }, [showLabels, searchTerm, minScoreFilter]); 
 
   // 6. DATA PROCESSING
   useEffect(() => {
@@ -790,23 +807,7 @@ const Networkgalaxy = ({ data, onNodeClick, showExternal, setShowExternal, perfo
 
         // --- LABELS (Sprites) ---
         nodeThreeObjectExtend={true}
-        nodeThreeObject={node => {
-            // 1. Check if node is part of the active view (filtered)
-            const isActive = !activeIds || activeIds.has(node.id);
-            if (!isActive) return null;
-
-            // 2. Check if label should be visible (Importance check)
-            // Always show if it's the selected node itself
-            const isSelectedTarget = selectedNode && selectedNode.id === node.id;
-            // Otherwise obey standard rules: Toggle ON or Score >= filter
-            if (!showLabels && node.score < minScoreFilter && !isSelectedTarget) return null;
-            
-            const sprite = new SpriteText(node.name || node.id);
-            sprite.color = node.score >= 6 ? '#ffaaaa' : '#e0e0e0';
-            sprite.textHeight = 8; // Fixed height
-            sprite.position.y = 8; // Offset above node
-            return sprite;
-        }}
+        nodeThreeObject={nodeThreeObject}
 
         // --- WIREFRAME ---
         onSceneMounted={scene => {

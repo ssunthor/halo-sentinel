@@ -122,11 +122,11 @@ thread_pool = ThreadPoolExecutor(max_workers=16)
 dns_pool = ThreadPoolExecutor(max_workers=32)
 
 RE_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-#RE_SUDO = re.compile(r"sudo\[\d+\]:\s+([^:]+)\s+:\s+.*?USER=([^;]+)\s+:\s+COMMAND=(.*)")
 RE_SUDO = re.compile(r"sudo(?:\[\d+\])?:\s+([^\s:]+).*?USER=([^\s;]+).*?COMMAND=(.*)", re.IGNORECASE)
 RE_TRAFFIC = re.compile(r"SrcIP:\s*([\d\.]+).*?DstIP:\s*([\d\.]+)")
 RE_SRC_IP = re.compile(r"SrcIP\s*:\s*([a-fA-F0-9\.\:]+)", re.IGNORECASE)
 RE_DST_IP = re.compile(r"DstIP\s*:\s*([a-fA-F0-9\.\:]+)", re.IGNORECASE)
+RE_FTD_HOST = re.compile(r"-\s+([A-Z0-9_\-]+)\s+%FTD")
 
 USER_PATTERNS = [
     re.compile(r"New Logon:[\s\S]*?Account Name:\s+([^\s]+)", re.IGNORECASE),
@@ -1454,522 +1454,199 @@ class DeduplicationFilter:
 deduplicator = DeduplicationFilter(ttl_seconds=2.0)
 anomaly_deduplicator = DeduplicationFilter(ttl_seconds=60.0)
 
-# --- NUCLEAR OPTION: DIRECT INJECTION PARSER ---
 def process_log_into_batch(raw_bytes, batch):
     try:
-        # FAST PATH: Decode
         payload = json_loads(raw_bytes)
-    except:
-        return
+    except: return
 
-    # PRE-COMPUTE (Avoid repeated lookups)
     timestamp_str = time.strftime('%H:%M:%S')
-    
-    # Try to use provided timestamp if available
     if payload.get("time_received_ns"):
-        try:
-            ts_ns = float(payload.get("time_received_ns"))
-            timestamp_str = datetime.fromtimestamp(ts_ns / 1e9).strftime('%H:%M:%S')
+        try: timestamp_str = datetime.fromtimestamp(float(payload.get("time_received_ns")) / 1e9).strftime('%H:%M:%S')
         except: pass
     elif payload.get("timestamp"):
         try:
-            # Handle both ISO strings and epoch numbers
             ts = payload.get("timestamp")
-            if isinstance(ts, (int, float)):
-                timestamp_str = datetime.fromtimestamp(ts).strftime('%H:%M:%S')
-            else:
-                timestamp_str = ts.split('T')[-1].split('.')[0] # Quick extraction
+            if isinstance(ts, (int, float)): timestamp_str = datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+            else: timestamp_str = ts.split('T')[-1].split('.')[0]
         except: pass
 
     raw_msg = payload.get("message") or ""
+    if payload.get("source") == "ns1.gtt.net": return
 
-    # FILTER: Exclude ns1.gtt.net
-    if payload.get("source") == "ns1.gtt.net":
-        return
-
-    # DEDUPLICATION (Skip for Firewalls)
-    is_firewall = "ftd" in raw_msg.lower() or "fpfw" in raw_msg.lower() or "%ftd" in raw_msg.lower()
+    is_firewall = any(k in raw_msg.lower() for k in ["ftd", "fpfw", "%ftd"])
     dedupe_source = payload.get("source") or payload.get("user_id") or payload.get("src_ip") or payload.get("src_addr") or "unknown"
-    dedupe_key = hash(f"{dedupe_source}:{raw_msg}")
-    
-    if not is_firewall and deduplicator.is_duplicate(dedupe_key):
-        return
+    if not is_firewall and deduplicator.is_duplicate(hash(f"{dedupe_source}:{raw_msg}")): return
 
-    if "security: info: client" in raw_msg or "query-errors: info: client" in raw_msg:
-        return
-
-    # 1. NETFLOW DFP PATH (Morpheus Output)
-    # Check for anomaly_score and any of the common host identification fields
+    # 1. NETFLOW DFP PATH
     if "anomaly_score" in payload and any(k in payload for k in ["src_ip", "src_addr", "user_id"]):
         score = min(clean_float(payload.get("anomaly_score", 0)) or 0.0, 10.0)
         rec_err = clean_float(payload.get("mean_abs_err", 0)) or 0.0
-        
-        # Determine Cause (Adjusted for Morpheus DFP: 0.0 is Learning, >0 is Normal/Anomalous)
         cause = payload.get("anomaly_cause")
         if not cause:
             if score == 0.0: cause = "Learning..."
             elif score <= 2.0: cause = "Normal"
             else: cause = "Anomalous Activity"
         
-        # Robust IP Extraction: Fallback through possible fields
         host_id = payload.get("src_ip") or payload.get("src_addr") or payload.get("user_id") or "unknown"
         clean_host = str(host_id).split('/')[0] if '/' in str(host_id) else str(host_id)
-        
-        # Destination info
         dst_ip = payload.get("dst_ip") or payload.get("dst_addr") or "unknown"
         
-        # Traffic info
         try:
-            raw_dport = int(payload.get("dst_port") or 0)
-            raw_sport = int(payload.get("src_port") or 0)
-            
-            # --- SERVICE PORT LOGIC ---
-            # In Netflow, we often see both directions.
-            # If sport is a service port (e.g. 443) and dport is high (e.g. 54321), 
-            # then sport is the "real" port we care about for the service.
-            if raw_sport < 1024 and raw_dport > 1024:
-                real_port = raw_sport
-            elif raw_dport < 1024 and raw_sport > 1024:
-                real_port = raw_dport
-            else:
-                # Default to destination if both are high or both are low
-                real_port = raw_dport or raw_sport
-                
-            real_dport = real_port # Use for visualization
-            real_sport = raw_sport # Keep for log detail
-        except (ValueError, TypeError):
-            real_dport = 0
-            real_sport = 0
+            raw_dport, raw_sport = int(payload.get("dst_port") or 0), int(payload.get("src_port") or 0)
+            real_port = raw_sport if (raw_sport < 1024 and raw_dport > 1024) else (raw_dport if (raw_dport < 1024 and raw_sport > 1024) else (raw_dport or raw_sport))
+            real_dport, real_sport = real_port, raw_sport
+        except: real_dport = real_sport = 0
 
-        # Protocol Handling (Supports "TCP", "UDP", or 6, 17)
         proto_raw = payload.get("protocol") or payload.get("proto") or 0
         if isinstance(proto_raw, str):
             p_up = proto_raw.upper()
-            if p_up == "TCP": proto = 6
-            elif p_up == "UDP": proto = 17
-            elif p_up == "ICMP": proto = 1
-            else:
-                try: proto = int(proto_raw)
-                except: proto = 0
-        else:
-            try: proto = int(proto_raw or 0)
-            except: proto = 0
+            proto = 6 if p_up == "TCP" else 17 if p_up == "UDP" else 1 if p_up == "ICMP" else int(proto_raw) if proto_raw.isdigit() else 0
+        else: proto = int(proto_raw or 0)
             
-        bytes_val = payload.get("bytes") or payload.get("log_bytes") or 0
-        if "log_bytes" in payload and payload["log_bytes"] is not None:
-            try:
-                # Reverse log scale if needed, but here we just want a display value
-                bytes_val = math.exp(float(payload["log_bytes"])) - 1
-            except: bytes_val = 0
-        else:
-            try: bytes_val = float(bytes_val or 0)
-            except: bytes_val = 0
+        bytes_val = math.exp(float(payload["log_bytes"])) - 1 if "log_bytes" in payload and payload["log_bytes"] is not None else float(payload.get("bytes", 0) or 0)
             
-        # --- REASON ENRICHMENT ---
-        if score > 2.0 and "volume" in str(cause).lower():
-            cause = f"Traffic Volume Spike (Port {real_dport})"
-        elif score > 5.0 and ("Unknown" in str(cause) or "Normal" in str(cause) or "Learning" in str(cause)):
-            cause = f"Anomalous Connection Pattern ({real_dport})"
+        if score > 2.0 and "volume" in str(cause).lower(): cause = f"Traffic Volume Spike (Port {real_dport})"
+        elif score > 5.0 and any(k in str(cause) for k in ["Unknown", "Normal", "Learning"]): cause = f"Anomalous Connection Pattern ({real_dport})"
 
-        # DIRECT BATCH UPDATE
-        batch.add_log(state.KEY_NETFLOW_SCATTER, {
-            "bytes": round(bytes_val, 2), "port": real_dport, "y": round(score, 4), 
-            "cause": str(cause), "host": clean_host, "time": timestamp_str
-        })
+        batch.add_log(state.KEY_NETFLOW_SCATTER, {"bytes": round(bytes_val, 2), "port": real_dport, "y": round(score, 4), "cause": str(cause), "host": clean_host, "time": timestamp_str})
         batch.inc_stat(state.KEY_NETFLOW_CAUSES, str(cause), 1)
         if rec_err > 1.0: batch.counts['netflow_anomalies'] += 1
         
-        # TOPOLOGY (Nodes and Links)
         batch.update_topo_node(clean_host, {'type': 'src', 'sources': {'netflow'}, 'score': score, 'val': 1, 'reason': str(cause), 'sent': bytes_val})
         if dst_ip != "unknown":
             batch.update_topo_node(dst_ip, {'type': 'dst', 'sources': {'netflow'}, 'val': 1, 'received': bytes_val})
             batch.update_topo_link(clean_host, dst_ip, 'allow')
 
-        # HOST STATS
         batch.update_host(clean_host, True, score, "Netflow DFP", reason=str(cause), sent=bytes_val)
-        if dst_ip != "unknown":
-            batch.update_host(dst_ip, False, 0.0, "Network Node", received=bytes_val)
+        if dst_ip != "unknown": batch.update_host(dst_ip, False, 0.0, "Network Node", received=bytes_val)
 
-        # PORT TRACKING
-        if real_dport > 0:
-            proto_name = "TCP" if proto == 6 else "UDP" if proto == 17 else str(proto)
-            port_label = f"{real_dport}/{proto_name}"
-            batch.inc_stat(f"morpheus:host:{clean_host}:ports", port_label, 1)
-            if dst_ip != "unknown":
-                batch.inc_stat(f"morpheus:host:{dst_ip}:ports", port_label, 1)
-
-        # Log Anomaly Spike (Deduplicated per 60s)
         if score > 2.0:
-            anomaly_key = hash(f"anomaly:{clean_host}:{cause}")
-            if not anomaly_deduplicator.is_duplicate(anomaly_key):
+            if not anomaly_deduplicator.is_duplicate(hash(f"anomaly:{clean_host}:{cause}")):
                 batch.add_anomaly_entry(clean_host, score, str(cause), f"Port: {real_dport}, Bytes: {bytes_val:.0f}")
-                # AI ANALYSIS TRIGGER: Queue background analysis for this host
-                # (Priority logic is inside HostAnalysisBroker.request_analysis)
                 batch.add_analysis_request(clean_host, score, str(cause), raw_msg or str(payload))
 
-        # --- THREAT STATS (Network) ---
         batch.inc_threat_stat('net_sum', score)
         batch.inc_threat_stat('net_count', 1.0)
-
-        # --- DESTINATION EXTRACTION ---
-        enriched_data = {}
-        if dst_ip != "unknown":
-             dst_geo = get_geoip(dst_ip)
-             if dst_geo:
-                dst_geo['time'] = timestamp_str
-                dst_geo['src_ip'] = clean_host
-                dst_geo['src_port'] = real_sport
-                dst_geo['dst_port'] = real_dport
-
-                asn_info = get_asn(dst_ip)
-                if asn_info:
-                    dst_geo.update(asn_info)
-
-                batch.add_destination(dst_geo)
-                if dst_geo.get('country'):
-                    batch.add_country_stat(dst_geo['country'])
-                enriched_data = dst_geo
-
-        # LOG ENTRY
-        fast_uuid = f"{time.time()}-{clean_host}-{random.randint(0, 1000000)}"
-        log_payload = {
-            "time": timestamp_str, "host": clean_host, "msg": f"Netflow DFP: {cause} (Score: {score:.2f})",
-            "category": "Netflow DFP", "priority": "high" if score > 8 else "medium",
-            "is_security_event": True, "anomaly_score": score,
-            "uuid": fast_uuid
-        }
-        log_payload.update(enriched_data)
-        batch.add_log(state.KEY_LOGS, log_payload)
-        return
-
-    # 2. LEGACY NETFLOW PATH (If still receiving feature_octets format)
-    if "feature_octets" in payload:
-        cause = payload.get("anomaly_cause") or "Unknown"
-        # Inline Float Cleaning
-        rec_err = payload.get("mean_abs_err", 0)
-        if isinstance(rec_err, (int, float)):
-             if math.isnan(rec_err) or math.isinf(rec_err): rec_err = 0.0
-        else: rec_err = 0.0
-            
-        octets = payload.get("feature_octets", 0)
-        user_id = payload.get("user_id") or "unknown"
-        
-        # Fast String Split instead of Regex
-        real_dport = 0
-        if '(' in raw_msg:
-            try: real_dport = int(raw_msg.split('Port (')[1].split(')')[0])
-            except: pass
-        
-        clean_host = user_id.split('/')[0] if user_id else "unknown"
-        
-        # Inline Score Calc
-        clean_score = 5.0 + math.log10(rec_err) if rec_err > 100 else rec_err
-        if math.isnan(clean_score) or math.isinf(clean_score): clean_score = 0.0
-        clean_score = min(clean_score, 10.0)
-
-        # --- REASON ENRICHMENT (Netflow) ---
-        if clean_score > 2.0 and "volume" in cause.lower():
-            cause = f"Traffic Volume Spike (Port {real_dport})"
-        elif clean_score > 5.0 and "Unknown" in cause:
-            cause = f"Anomalous Connection Pattern ({real_dport})"
-
-        # DIRECT BATCH UPDATE (No intermediate dicts)
-        batch.add_log(state.KEY_NETFLOW_SCATTER, {
-            "bytes": round(octets, 2), "port": real_dport, "y": round(clean_score, 4), 
-            "cause": cause, "host": clean_host, "time": timestamp_str
-        })
-        batch.inc_stat(state.KEY_NETFLOW_CAUSES, str(cause), 1)
-        if rec_err > 1.0: batch.counts['netflow_anomalies'] += 1
-        
-        batch.update_topo_node(clean_host, {'type': 'src', 'sources': {'netflow'}, 'score': clean_score, 'val': 1, 'reason': cause})
-        batch.update_host(clean_host, True, clean_score, "Netflow DFP", reason=cause)
-
-        # --- THREAT STATS (Network) ---
-        batch.inc_threat_stat('net_sum', clean_score)
-        batch.inc_threat_stat('net_count', 1.0)
-
-        # --- NEW: NETFLOW DESTINATION EXTRACTION (Optimized) ---
-        enriched_data = {}
-        try:
-            if ',' in raw_msg and raw_msg.count(',') > 10:
-                parts = raw_msg.split(',')
-                dst_raw = parts[9] # "1.2.3.4/24"
-                dst_ip = dst_raw.split('/')[0]
-                
-                if dst_ip.count('.') == 3:
-                     dst_geo = get_geoip(dst_ip)
-                     if dst_geo:
-                        dst_geo['time'] = timestamp_str
-                        dst_geo['src_ip'] = parts[6].split('/')[0]
-                        dst_geo['src_port'] = parts[7]
-                        dst_geo['dst_port'] = parts[10]
-
-                        asn_info = get_asn(dst_ip)
-                        if asn_info:
-                            dst_geo.update(asn_info)
-
-                        batch.add_destination(dst_geo)
-                        if dst_geo.get('country'):
-                            batch.add_country_stat(dst_geo['country'])
-                        enriched_data = dst_geo
-        except: pass
-        # -------------------------------------------
-
-        # FAST UUID: Time + Random Int is 100x faster than uuid.uuid4()
-        fast_uuid = f"{time.time()}-{math.floor(octets)}-{random.randint(0, 1000000)}"
-        
-        log_payload = {
-            "time": timestamp_str, "host": user_id, "msg": f"Netflow: {cause}",
-            "category": "Netflow DFP", "priority": "high" if clean_score > 8 else "medium",
-            "is_security_event": True, "anomaly_score": clean_score,
-            "uuid": fast_uuid
-        }
-        log_payload.update(enriched_data)
-        batch.add_log(state.KEY_LOGS, log_payload)
         return
 
     # 2. SYSLOG
     main_label = payload.get("main_label") or "N/A"
     hostname = payload.get("source") or "unknown"
     lower_msg = raw_msg.lower()
+    main_label_upper = main_label.upper()
     enriched_data = {}
     
-    # --- FTD HOSTNAME EXTRACTION ---
-    # Example: <14>Mar 10 18:51:16 10.151.0.6 Unknown - USNYHFPFW06 %FTD-1-430003
     if "%FTD" in raw_msg:
-        ftd_host_match = re.search(r"-\s+([A-Z0-9_\-]+)\s+%FTD", raw_msg)
-        if ftd_host_match:
-            hostname = ftd_host_match.group(1)
+        ftd_host_match = RE_FTD_HOST.search(raw_msg)
+        if ftd_host_match: hostname = ftd_host_match.group(1)
 
     is_sec = "SECURITY" in main_label and "NON_SECURITY" not in main_label
     if not is_sec:
-        if "denied" in lower_msg or "block" in lower_msg: is_sec = True
-        elif "fail" in lower_msg or "invalid" in lower_msg: is_sec = True
+        if any(k in lower_msg for k in ["denied", "block", "fail", "invalid"]): is_sec = True
 
-    # CATEGORY DETERMINATION (Robust Substring Matching)
-    main_label_upper = main_label.upper()
-    
-    if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]):
-        category = "Firewall"
-        is_sec = True
-    elif "error" in lower_msg or "failed" in lower_msg:
-        category = "Error"
-        is_sec = True
-    elif "sudo" in lower_msg:
-        category = "Sudo"
-        is_sec = True
-    elif "http" in lower_msg:
-        category = "HTTP"
-        is_sec = False
-    elif "squid" in lower_msg or "proxy" in lower_msg:
-        category = "Proxy"
-        is_sec = False
-    elif "named" in lower_msg or "dns" in lower_msg:
-        category = "DNS"
-        is_sec = False
-    elif "systemd" in lower_msg:
-        category = "System"
-        is_sec = False
-    elif "ftp" in lower_msg:
-        category = "Data Transfer"
-        is_sec = True
-    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg or "denied" in lower_msg or "radius" in lower_msg:
-        category = "Authentication"
-        is_sec = True
-    elif "AUTHORIZATION" in main_label_upper or "authorization" in lower_msg:
-        category = "Authorization"
-        is_sec = True
-    elif "INTRUSION" in main_label_upper or "THREAT" in main_label_upper:
-        category = "Firewall"
-        is_sec = True
-    elif "SYSTEM" in main_label_upper or "KERNEL" in main_label_upper or "NON_SECURITY" in main_label_upper:
-        category = "System"
-        is_sec = False
-    elif "SECURITY" in main_label_upper:
-        category = "Security"
-        is_sec = True
-    else:
-        category = "Other"
-        is_sec = False
+    # CATEGORY
+    if any(k in lower_msg for k in ["ftd", "fpfw", "asa", "deny", "block", "firewall"]): category = "Firewall"
+    elif any(k in lower_msg for k in ["error", "failed"]): category = "Error"
+    elif "sudo" in lower_msg: category = "Sudo"
+    elif "AUTHENTICATION" in main_label_upper or "LOGIN" in main_label_upper or "authentication" in lower_msg or "denied" in lower_msg: category = "Authentication"
+    elif "AUTHORIZATION" in main_label_upper or "authorization" in lower_msg: category = "Authorization"
+    elif "SYSTEM" in main_label_upper or "KERNEL" in main_label_upper or "NON_SECURITY" in main_label_upper: category = "System"
+    elif "SECURITY" in main_label_upper: category = "Security"
+    else: category = "Other"
 
     # COUNTS
     is_auth_fail = "FAILURE" in main_label_upper or any(k in lower_msg for k in ["failed", "invalid password", "invalid user", "authentication failure", "failed password", "denied"])
     is_logon = "SUCCESS" in main_label_upper or any(k in lower_msg for k in ["accepted password", "accepted publickey", "session opened", "new logon"])
-
     if is_auth_fail and (category == "Authentication" or "user" in lower_msg): 
         batch.counts['auth_fail'] += 1
         batch.inc_threat_stat('auth_fail', 1.0)
-    elif is_logon and (category == "Authentication" or "user" in lower_msg):
-        batch.counts['logons'] += 1
+    elif is_logon and (category == "Authentication" or "user" in lower_msg): batch.counts['logons'] += 1
     
-    if category == "Firewall":
-        batch.counts['firewall_block'] += 1
-    elif is_sec:
-        batch.counts['security'] += 1
+    if category == "Firewall": batch.counts['firewall_block'] += 1
+    elif is_sec: batch.counts['security'] += 1
 
-    # SUDO EXTRACTION
-    if 'sudo' in lower_msg:
-        batch.counts['sudo'] += 1
-        if "command=" in lower_msg:
-            sudo_match = RE_SUDO.search(raw_msg)
-            if sudo_match:
-                batch.add_log(state.KEY_SUDO_CMDS, {
-                    "host": hostname, 
-                    "executing_user": sudo_match.group(1).strip(), 
-                    "run_as_user": sudo_match.group(2).strip(), 
-                    "command": sudo_match.group(3).strip(), 
-                    "time": timestamp_str
-                })
+    if 'sudo' in lower_msg and "command=" in lower_msg:
+        sudo_match = RE_SUDO.search(raw_msg)
+        if sudo_match: batch.add_log(state.KEY_SUDO_CMDS, {"host": hostname, "executing_user": sudo_match.group(1).strip(), "run_as_user": sudo_match.group(2).strip(), "command": sudo_match.group(3).strip(), "time": timestamp_str})
 
-    # USER EXTRACTION (Only if needed)
     if "user" in lower_msg or "login" in lower_msg:
         for pattern in USER_PATTERNS:
             m = pattern.search(raw_msg)
             if m: 
                 raw_user = m.group(1).rstrip('.').strip()
-                
-                # --- FILTER CHECK ---
-                if (len(raw_user) > 1 and 
-                    raw_user.lower() not in INVALID_USERS and 
-                    re.match(r"^[a-zA-Z0-9_\-\.]+$", raw_user)):
-                    
+                if len(raw_user) > 1 and raw_user.lower() not in INVALID_USERS and re.match(r"^[a-zA-Z0-9_\-\.]+$", raw_user):
                     batch.update_user(raw_user, hostname)
                 break
 
-    # ANOMALY SCORE
-    sys_anomaly_score = payload.get("anomaly_score", -1)
-    if isinstance(sys_anomaly_score, (int, float)):
-         if math.isnan(sys_anomaly_score) or math.isinf(sys_anomaly_score): sys_anomaly_score = 0.0
-         else: sys_anomaly_score = min(float(sys_anomaly_score), 10.0)
-    else: sys_anomaly_score = 0.0
-
+    sys_anomaly_score = min(clean_float(payload.get("anomaly_score", -1)) or 0.0, 10.0)
     if sys_anomaly_score <= 0:
         prio = (payload.get("priority_str") or "low").lower()
         if prio == "critical": sys_anomaly_score = 10.0
         elif prio == "high": sys_anomaly_score = 6.0
         elif is_sec: sys_anomaly_score = 3.0
 
-    # --- REASON ENRICHMENT (Syslog) ---
     anomaly_cause = payload.get("anomaly_cause") or ""
     if sys_anomaly_score > 3.0:
-        if category == "Authentication" and "FAILURE" in main_label.upper():
-            anomaly_cause = "Elevated Authentication Failures"
-        elif category == "Firewall":
-            anomaly_cause = "High-Volume Firewall Blocks"
-        elif category == "Authorization":
-            anomaly_cause = "Unauthorized Access Attempts"
-        elif "sudo" in lower_msg:
-            anomaly_cause = "Anomalous Sudo Activity"
-        elif not anomaly_cause:
-            anomaly_cause = "Significant System DNA Divergence"
+        if category == "Authentication" and "FAILURE" in main_label.upper(): anomaly_cause = "Elevated Authentication Failures"
+        elif category == "Firewall": anomaly_cause = "High-Volume Firewall Blocks"
+        elif category == "Authorization": anomaly_cause = "Unauthorized Access Attempts"
+        elif not anomaly_cause: anomaly_cause = "Significant System DNA Divergence"
 
-    # IGNORE FIREWALLS FOR DFP/ANOMALY STATS
-    if category == "Firewall":
-        sys_anomaly_score = 0.0
-
-    # TOPOLOGY NODES
+    if category == "Firewall": sys_anomaly_score = 0.0
     if category != "Firewall":
         if sys_anomaly_score > 0:
             batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'score': sys_anomaly_score, 'val': 1, 'reason': anomaly_cause})
-            state.current_global_anomaly_sum += sys_anomaly_score
-            state.current_global_anomaly_count += 1
-            
-            # Threat Stats (System)
             batch.inc_threat_stat('sys_sum', sys_anomaly_score)
             batch.inc_threat_stat('sys_count', 1.0)
-
-            # Log Anomaly Spike (Deduplicated per 60s)
             if sys_anomaly_score > 3.0:
-                anomaly_key = hash(f"anomaly:{hostname}:{anomaly_cause}")
-                if not anomaly_deduplicator.is_duplicate(anomaly_key):
+                if not anomaly_deduplicator.is_duplicate(hash(f"anomaly:{hostname}:{anomaly_cause}")):
                     batch.add_anomaly_entry(hostname, sys_anomaly_score, anomaly_cause, raw_msg[:200])
-                    # AI ANALYSIS TRIGGER: Queue background analysis
-                    # (Priority logic is inside HostAnalysisBroker.request_analysis)
                     batch.add_analysis_request(hostname, sys_anomaly_score, anomaly_cause, raw_msg)
-        else:
-            batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
+        else: batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
         
     batch.update_host(hostname, is_sec, sys_anomaly_score, category, reason=anomaly_cause)
 
-    # FAST LINK EXTRACTION
-    if "SrcIP" in raw_msg and "DstIP" in raw_msg:
-        src_match = RE_SRC_IP.search(raw_msg)
-        dst_match = RE_DST_IP.search(raw_msg)
+    # LINK EXTRACTION
+    if any(k in raw_msg for k in ["SrcIP", "DstIP"]):
+        src_match, dst_match = RE_SRC_IP.search(raw_msg), RE_DST_IP.search(raw_msg)
         if src_match and dst_match:
-            src = src_match.group(1)
-            dst = dst_match.group(1)
+            src, dst = src_match.group(1), dst_match.group(1)
+            ltype = "block" if any(k in lower_msg for k in ["deny", "denied", "block"]) else "allow"
+            batch.update_topo_link(src, dst, ltype)
             
-            # Action logic: FTD uses 'AccessControlRuleAction: Allow' or 'Deny'
-            ltype = "allow"
-            if any(k in lower_msg for k in ["deny", "denied", "block", "blocked"]):
-                ltype = "block"
-            
-            key = f"{src}-{dst}"
-            batch.topo_links[key]['val'] += 1
-            
-            # --- IP IDENTITY & STATS ---
             def is_rfc1918(ip):
-                try:
-                    if ip.startswith("10.") or ip.startswith("192.168."): return True
-                    if ip.startswith("172."):
-                        parts = ip.split(".")
-                        if len(parts) > 1 and 16 <= int(parts[1]) <= 31: return True
-                    return False
-                except: return False
+                if ip.startswith("10.") or ip.startswith("192.168."): return True
+                if ip.startswith("172."):
+                    parts = ip.split(".")
+                    if len(parts) > 1 and 16 <= int(parts[1]) <= 31: return True
+                return False
 
-            src_is_ext = not is_rfc1918(src)
-            dst_is_ext = not is_rfc1918(dst)
-
-            # Map PLOTTING (High fidelity for blocks, sampled for allow)
-            ext_ip_to_map = src if src_is_ext else (dst if dst_is_ext else None)
-            if ext_ip_to_map:
-                if ltype == 'block' or random.random() < 0.05:
-                    geo = get_geoip(ext_ip_to_map)
-                    if geo:
-                        geo['action'] = ltype
-                        batch.update_map(ext_ip_to_map, geo)
-                        if ltype == 'block' and src_is_ext:
-                            if geo.get('country'):
-                                batch.add_attack_country_stat(geo['country'])
+            src_is_ext, dst_is_ext = not is_rfc1918(src), not is_rfc1918(dst)
+            ext_ip = src if src_is_ext else (dst if dst_is_ext else None)
+            if ext_ip and (ltype == 'block' or random.random() < 0.05):
+                geo = get_geoip(ext_ip)
+                if geo:
+                    geo['action'] = ltype
+                    batch.update_map(ext_ip, geo)
+                    if ltype == 'block' and src_is_ext and geo.get('country'):
+                        batch.add_attack_country_stat(geo['country'])
 
             batch.update_topo_node(src, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
             batch.update_topo_node(dst, {'type': 'dst', 'sources': {'syslog'}, 'val': 1})
 
-            # --- DESTINATION ENRICHMENT (For External Traffic) ---
             if dst_is_ext:
-                dst_geo = get_geoip(dst)
-                if dst_geo:
-                    dst_geo['time'] = timestamp_str
-                    dst_geo['src_ip'] = src
-                    
-                    try:
-                        sp_match = re.search(r"SrcPort\s*:\s*(\d+)", raw_msg, re.I)
-                        dp_match = re.search(r"DstPort\s*:\s*(\d+)", raw_msg, re.I)
-                        dst_geo['src_port'] = sp_match.group(1) if sp_match else "0"
-                        dst_geo['dst_port'] = dp_match.group(1) if dp_match else "0"
-                    except:
-                        dst_geo['src_port'] = "0"
-                        dst_geo['dst_port'] = "0"
-                    
-                    asn_info = get_asn(dst)
-                    if asn_info: dst_geo.update(asn_info)
+                dg = get_geoip(dst)
+                if dg:
+                    dg.update({'time': timestamp_str, 'src_ip': src, 'src_port': "0", 'dst_port': "0"})
+                    asn = get_asn(dst)
+                    if asn: dg.update(asn)
+                    batch.add_destination(dg)
+                    if dg.get('country'):
+                        batch.add_country_stat(dg['country'])
+                    enriched_data = dg
 
-                    batch.add_destination(dst_geo)
-                    if dst_geo.get('country'):
-                        batch.add_country_stat(dst_geo['country'])
-                    enriched_data = dst_geo
-
-    # LOG ENTRY (Separate Firewalls from System Logs)
     log_key = state.KEY_FIREWALL_LOGS if category == "Firewall" else state.KEY_LOGS
-
-    fast_uuid = f"{time.time()}-{len(raw_msg)}-{random.randint(0, 1000000)}"
-    log_payload = {
-        "time": timestamp_str, "host": hostname, "msg": raw_msg[:5000],
-        "priority": "high" if sys_anomaly_score > 3 else "low", 
-        "uuid": fast_uuid,
-        "is_security_event": is_sec, "anomaly_score": sys_anomaly_score,
-        "category": category
-    }
+    log_payload = {"time": timestamp_str, "host": hostname, "msg": raw_msg[:5000], "priority": "high" if sys_anomaly_score > 3 else "low", "uuid": str(uuid.uuid4()), "is_security_event": is_sec, "anomaly_score": sys_anomaly_score, "category": category}
     log_payload.update(enriched_data)
     batch.add_log(log_key, log_payload)
 

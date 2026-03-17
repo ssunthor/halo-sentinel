@@ -124,8 +124,9 @@ dns_pool = ThreadPoolExecutor(max_workers=32)
 RE_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 RE_SUDO = re.compile(r"sudo(?:\[\d+\])?:\s+([^\s:]+).*?USER=([^\s;]+).*?COMMAND=(.*)", re.IGNORECASE)
 RE_TRAFFIC = re.compile(r"SrcIP:\s*([\d\.]+).*?DstIP:\s*([\d\.]+)")
-RE_SRC_IP = re.compile(r"SrcIP\s*:\s*([a-fA-F0-9\.\:]+)", re.IGNORECASE)
-RE_DST_IP = re.compile(r"DstIP\s*:\s*([a-fA-F0-9\.\:]+)", re.IGNORECASE)
+# Robust IP labels: supports SrcIP:, src=, src-ip:, SrcAddr:
+RE_SRC_IP = re.compile(r"(?:SrcIP|src|src-ip|SrcAddr)\s*[:=]\s*([a-fA-F0-9\.\:]+)", re.IGNORECASE)
+RE_DST_IP = re.compile(r"(?:DstIP|dst|dst-ip|DstAddr)\s*[:=]\s*([a-fA-F0-9\.\:]+)", re.IGNORECASE)
 RE_FTD_HOST = re.compile(r"-\s+([A-Z0-9_\-]+)\s+%FTD")
 
 USER_PATTERNS = [
@@ -1607,43 +1608,51 @@ def process_log_into_batch(raw_bytes, batch):
     batch.update_host(hostname, is_sec, sys_anomaly_score, category, reason=anomaly_cause)
 
     # LINK EXTRACTION
-    if any(k in raw_msg for k in ["SrcIP", "DstIP"]):
-        src_match, dst_match = RE_SRC_IP.search(raw_msg), RE_DST_IP.search(raw_msg)
-        if src_match and dst_match:
-            src, dst = src_match.group(1), dst_match.group(1)
-            ltype = "block" if any(k in lower_msg for k in ["deny", "denied", "block"]) else "allow"
-            batch.update_topo_link(src, dst, ltype)
-            
-            def is_rfc1918(ip):
-                if ip.startswith("10.") or ip.startswith("192.168."): return True
-                if ip.startswith("172."):
-                    parts = ip.split(".")
-                    if len(parts) > 1 and 16 <= int(parts[1]) <= 31: return True
-                return False
+    src_match, dst_match = RE_SRC_IP.search(raw_msg), RE_DST_IP.search(raw_msg)
+    if src_match and dst_match:
+        src, dst = src_match.group(1), dst_match.group(1)
+        ltype = "block" if any(k in lower_msg for k in ["deny", "denied", "block"]) else "allow"
+        batch.update_topo_link(src, dst, ltype)
+        
+        def is_rfc1918(ip):
+            if ip.startswith("10.") or ip.startswith("192.168."): return True
+            if ip.startswith("172."):
+                parts = ip.split(".")
+                if len(parts) > 1 and 16 <= int(parts[1]) <= 31: return True
+            return False
 
-            src_is_ext, dst_is_ext = not is_rfc1918(src), not is_rfc1918(dst)
-            ext_ip = src if src_is_ext else (dst if dst_is_ext else None)
-            if ext_ip and (ltype == 'block' or random.random() < 0.05):
-                geo = get_geoip(ext_ip)
-                if geo:
-                    geo['action'] = ltype
-                    batch.update_map(ext_ip, geo)
-                    if ltype == 'block' and src_is_ext and geo.get('country'):
-                        batch.add_attack_country_stat(geo['country'])
+        src_is_ext, dst_is_ext = not is_rfc1918(src), not is_rfc1918(dst)
+        ext_ip = src if src_is_ext else (dst if dst_is_ext else None)
+        if ext_ip and (ltype == 'block' or random.random() < 0.05):
+            geo = get_geoip(ext_ip)
+            if geo:
+                geo['action'] = ltype
+                batch.update_map(ext_ip, geo)
+                if ltype == 'block' and src_is_ext and geo.get('country'):
+                    batch.add_attack_country_stat(geo['country'])
 
-            batch.update_topo_node(src, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
-            batch.update_topo_node(dst, {'type': 'dst', 'sources': {'syslog'}, 'val': 1})
+        batch.update_topo_node(src, {'type': 'src', 'sources': {'syslog'}, 'val': 1})
+        batch.update_topo_node(dst, {'type': 'dst', 'sources': {'syslog'}, 'val': 1})
 
-            if dst_is_ext:
-                dg = get_geoip(dst)
-                if dg:
-                    dg.update({'time': timestamp_str, 'src_ip': src, 'src_port': "0", 'dst_port': "0"})
-                    asn = get_asn(dst)
-                    if asn: dg.update(asn)
-                    batch.add_destination(dg)
-                    if dg.get('country'):
-                        batch.add_country_stat(dg['country'])
-                    enriched_data = dg
+        if dst_is_ext:
+            dg = get_geoip(dst)
+            if dg:
+                # Try to extract ports if available
+                src_port, dst_port = "0", "0"
+                try:
+                    sp_m = re.search(r"(?:SrcPort|sport)\s*[:=]\s*(\d+)", raw_msg, re.I)
+                    dp_m = re.search(r"(?:DstPort|dport)\s*[:=]\s*(\d+)", raw_msg, re.I)
+                    if sp_m: src_port = sp_m.group(1)
+                    if dp_m: dst_port = dp_m.group(1)
+                except: pass
+                
+                dg.update({'time': timestamp_str, 'src_ip': src, 'src_port': src_port, 'dst_port': dst_port})
+                asn = get_asn(dst)
+                if asn: dg.update(asn)
+                batch.add_destination(dg)
+                if dg.get('country'):
+                    batch.add_country_stat(dg['country'])
+                enriched_data = dg
 
     log_key = state.KEY_FIREWALL_LOGS if category == "Firewall" else state.KEY_LOGS
     log_payload = {"time": timestamp_str, "host": hostname, "msg": raw_msg[:5000], "priority": "high" if sys_anomaly_score > 3 else "low", "uuid": str(uuid.uuid4()), "is_security_event": is_sec, "anomaly_score": sys_anomaly_score, "category": category}

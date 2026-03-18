@@ -1128,6 +1128,9 @@ class RedisDashboardState:
             for i, h in enumerate(all_hosts_list):
                 h['has_analysis'] = bool(results[i])
 
+        global_history = get_list(self.KEY_ANOMALY_HISTORY, limit=60)
+        overall_score = global_history[0].get('avg_score', 0) if global_history else 0
+
         return {
             "metrics": { "eps": 0, "counts": counts, "seen_users": len(user_raw), "seen_hosts": len(all_hosts_list) },
             "all_hosts": all_hosts_list,
@@ -1146,7 +1149,12 @@ class RedisDashboardState:
                 "major_anomaly_events": get_list(self.KEY_MAJOR_ANOMALIES, limit=50) 
             },
             "map": get_hash_values(self.KEY_MAP, limit=500), 
-            "anomalies": { "global_history": get_list(self.KEY_ANOMALY_HISTORY, limit=60), "top_hosts": anomaly_hosts, "trending_up_hosts": [], "overall_anomaly_score": 0 },
+            "anomalies": { 
+                "global_history": global_history, 
+                "top_hosts": anomaly_hosts, 
+                "trending_up_hosts": [], 
+                "overall_anomaly_score": overall_score
+            },
             
             # Updated Sudo Stats
             "sudo_stats": { "top_hosts": top_sudo_hosts, "top_users": top_sudo_users },
@@ -1823,6 +1831,10 @@ def fetch_and_process_batch(consumer, batch_size, timeout, processor=process_log
             
             main_batch.country_activity.update(lb.country_activity)
             main_batch.attack_country_activity.update(lb.attack_country_activity)
+            
+            # Anomaly Tracking
+            main_batch.anomaly_sum += lb.anomaly_sum
+            main_batch.anomaly_count += lb.anomaly_count
             
             # Complex Objects
             for nid, node_data in lb.topo_nodes.items():

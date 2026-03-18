@@ -501,6 +501,7 @@ class RedisDashboardState:
         self.smoothed_eps = 0.0
         self.current_global_anomaly_sum = 0
         self.current_global_anomaly_count = 0
+        self.anomaly_lock = threading.Lock()
         
         # Performance Cache
         self.cached_snapshot = None
@@ -888,8 +889,10 @@ class RedisDashboardState:
             pipe.ltrim(host_key, 0, 99) # Keep last 100 entries
 
         # 12. Global Anomaly Accumulation (for history worker)
-        self.current_global_anomaly_sum += batch.anomaly_sum
-        self.current_global_anomaly_count += batch.anomaly_count
+        if batch.anomaly_count > 0:
+            with self.anomaly_lock:
+                self.current_global_anomaly_sum += batch.anomaly_sum
+                self.current_global_anomaly_count += batch.anomaly_count
 
         pipe.execute()
 
@@ -1642,11 +1645,12 @@ async def metric_worker():
         state.smoothed_eps = total_eps # Components are already smoothed
         state.push_log(state.KEY_EPS_HISTORY, {"time": time.strftime('%H:%M:%S'), "eps": int(state.smoothed_eps)}, max_len=60)
         
-        if state.current_global_anomaly_count > 0:
-            avg = state.current_global_anomaly_sum / state.current_global_anomaly_count
-            state.push_log(state.KEY_ANOMALY_HISTORY, {"time": time.strftime('%H:%M:%S'), "avg_score": round(avg, 2)}, max_len=60)
-            state.current_global_anomaly_sum = 0
-            state.current_global_anomaly_count = 0
+        with state.anomaly_lock:
+            if state.current_global_anomaly_count > 0:
+                avg = state.current_global_anomaly_sum / state.current_global_anomaly_count
+                state.push_log(state.KEY_ANOMALY_HISTORY, {"time": time.strftime('%H:%M:%S'), "avg_score": round(avg, 2)}, max_len=60)
+                state.current_global_anomaly_sum = 0
+                state.current_global_anomaly_count = 0
         
         await asyncio.sleep(1)
 

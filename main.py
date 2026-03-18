@@ -393,6 +393,8 @@ class BatchAccumulator:
         self.attack_country_activity = Counter()
         self.threat_stats = defaultdict(float)
         self.analysis_requests = [] # New: Queue for AI analysis
+        self.anomaly_sum = 0.0
+        self.anomaly_count = 0
 
     def add_log(self, key, item): self.list_push[key].append(item)
     def add_analysis_request(self, host, score, reason, msg):
@@ -884,6 +886,10 @@ class RedisDashboardState:
             host_key = f"{self.KEY_HOST_ANOMALIES_PREFIX}{entry['host']}"
             pipe.lpush(host_key, json_dumps_bytes(entry))
             pipe.ltrim(host_key, 0, 99) # Keep last 100 entries
+
+        # 12. Global Anomaly Accumulation (for history worker)
+        self.current_global_anomaly_sum += batch.anomaly_sum
+        self.current_global_anomaly_count += batch.anomaly_count
 
         pipe.execute()
 
@@ -1597,6 +1603,8 @@ def process_log_into_batch(raw_bytes, batch):
     if category != "Firewall":
         if sys_anomaly_score > 0:
             batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'score': sys_anomaly_score, 'val': 1, 'reason': anomaly_cause})
+            batch.anomaly_sum += sys_anomaly_score
+            batch.anomaly_count += 1
             batch.inc_threat_stat('sys_sum', sys_anomaly_score)
             batch.inc_threat_stat('sys_count', 1.0)
             if sys_anomaly_score > 3.0:

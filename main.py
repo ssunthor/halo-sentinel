@@ -1585,7 +1585,12 @@ def process_log_into_batch(raw_bytes, batch):
                     batch.update_user(raw_user, hostname)
                 break
 
-    sys_anomaly_score = min(clean_float(payload.get("anomaly_score", -1)) or 0.0, 10.0)
+    raw_anomaly = payload.get("anomaly_score")
+    if raw_anomaly is not None:
+        sys_anomaly_score = min(clean_float(raw_anomaly) or 0.0, 10.0)
+    else:
+        sys_anomaly_score = 0.0
+
     if sys_anomaly_score <= 0:
         prio = (payload.get("priority_str") or "low").lower()
         if prio == "critical": sys_anomaly_score = 10.0
@@ -1599,7 +1604,10 @@ def process_log_into_batch(raw_bytes, batch):
         elif category == "Authorization": anomaly_cause = "Unauthorized Access Attempts"
         elif not anomaly_cause: anomaly_cause = "Significant System DNA Divergence"
 
-    if category == "Firewall": sys_anomaly_score = 0.0
+    if category == "Firewall": 
+        # Don't add firewall events to global DNA trend, but keep score for node visibility
+        pass
+
     if category != "Firewall":
         if sys_anomaly_score > 0:
             batch.update_topo_node(hostname, {'type': 'src', 'sources': {'syslog'}, 'score': sys_anomaly_score, 'val': 1, 'reason': anomaly_cause})

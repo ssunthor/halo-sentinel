@@ -1416,11 +1416,11 @@ def process_log_into_batch(raw_bytes, batch):
     else:
         sys_anomaly_score = 0.0
 
-    if sys_anomaly_score <= 0:
-        prio = (payload.get("priority_str") or "low").lower()
-        if prio == "critical": sys_anomaly_score = 10.0
-        elif prio == "high": sys_anomaly_score = 6.0
-        elif is_sec: sys_anomaly_score = 3.0
+    #if sys_anomaly_score <= 0:
+    #    prio = (payload.get("priority_str") or "low").lower()
+    #    if prio == "critical": sys_anomaly_score = 10.0
+    #    elif prio == "high": sys_anomaly_score = 6.0
+    #    elif is_sec: sys_anomaly_score = 3.0
 
     anomaly_cause = payload.get("anomaly_cause") or ""
     if sys_anomaly_score > 3.0:

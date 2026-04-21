@@ -105,6 +105,12 @@ const isInTargetSubnet = (ip) => {
   return lastOctet >= 0 && lastOctet <= 31;
 };
 
+// --- MENU VISIBILITY HELPER ---
+const isMenuVisible = (envVar) => {
+  // Vite exposes env vars via import.meta.env
+  // They are always strings.
+  return import.meta.env[envVar] === "1";
+};
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -1950,29 +1956,17 @@ function App() {
             </div>
           </div>
           <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
-            <NavButton id="overview" label="Global Overview" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} />
-            <NavButton id="host_inventory" label="Host Inventory" icon={Server} activeTab={activeTab} setTab={setActiveTab} />
-            
-            <CollapsibleNavSection 
-              label="Visualizations" 
-              icon={Aperture} 
-              activeTab={activeTab} 
-              childIds={['galaxy', 'destinations', 'city', 'hive', 'torus']}
-            >
-              <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} />
-              <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} />
-              <NavButton id="city" label="Cyber City" icon={Building2} activeTab={activeTab} setTab={setActiveTab} />
-              <NavButton id="hive" label="Behavioral Hive" icon={Box} activeTab={activeTab} setTab={setActiveTab} />
-	  {/* <NavButton id="torus" label="Traffic Torus" icon={Disc} activeTab={activeTab} setTab={setActiveTab} /> */}
-            </CollapsibleNavSection>
-
-            <NavButton id="anomalies" label="System Log DNA" icon={AlertTriangle} activeTab={activeTab} setTab={setActiveTab} />
-            <NavButton id="dfp" label="Network Netflow DNA" icon={Fingerprint} activeTab={activeTab} setTab={setActiveTab} />
-            <NavButton id="user" label="User Activity" icon={Users} activeTab={activeTab} setTab={setActiveTab} />
-            <NavButton id="host" label="Host Forensics" icon={Server} activeTab={activeTab} setTab={setActiveTab} />
-            <NavButton id="network" label="Network & Firewall" icon={MapIcon} activeTab={activeTab} setTab={setActiveTab} />
-            <NavButton id="netbox" label="Netbox CVEs" icon={Shield} activeTab={activeTab} setTab={setActiveTab} />
-            <NavButton id="raw" label="Raw Data" icon={Terminal} activeTab={activeTab} setTab={setActiveTab} />
+            {isMenuVisible('VITE_SHOW_OVERVIEW') && <NavButton id="overview" label="Global Overview" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_HOST_INVENTORY') && <NavButton id="host_inventory" label="Host Inventory" icon={Server} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_GALAXY') && <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_DESTINATIONS') && <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_LOG_DNA') && <NavButton id="anomalies" label="System Log DNA" icon={AlertTriangle} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_NETFLOW_DNA') && <NavButton id="dfp" label="Network Netflow DNA" icon={Fingerprint} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_USER_ACTIVITY') && <NavButton id="user" label="User Activity" icon={Users} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_HOST_FORENSICS') && <NavButton id="host" label="Host Forensics" icon={Server} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_NETWORK') && <NavButton id="network" label="Network & Firewall" icon={MapIcon} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_NETBOX') && <NavButton id="netbox" label="Netbox CVEs" icon={Shield} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_RAW_DATA') && <NavButton id="raw" label="Raw Data" icon={Terminal} activeTab={activeTab} setTab={setActiveTab} /> }
           </nav>
           <div className="p-4 border-t border-gray-900">
             <div className="text-xs text-gray-600 uppercase font-bold mb-2">System Status</div>

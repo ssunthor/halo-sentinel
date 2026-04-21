@@ -27,6 +27,7 @@ import BehavioralHive from './components/BehavioralHive';
 import CyberCity from './components/CyberCity';
 import TrafficTorus from './components/TrafficTorus';
 import ChatWidget from './components/ChatWidget';
+import ConfigAnalyzer from './components/ConfigAnalyzer';
 import { DEFAULT_FEEDS } from './config/feeds';
 
 
@@ -1967,6 +1968,18 @@ function App() {
             {isMenuVisible('VITE_SHOW_NETWORK') && <NavButton id="network" label="Network & Firewall" icon={MapIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_NETBOX') && <NavButton id="netbox" label="Netbox CVEs" icon={Shield} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_RAW_DATA') && <NavButton id="raw" label="Raw Data" icon={Terminal} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_CONFIG_ANALYZER') && (
+              <CollapsibleNavSection 
+                label="Config Analyzer" 
+                icon={FileSearch} 
+                activeTab={activeTab} 
+                childIds={['analyzer', 'translate', 'greenfield']}
+              >
+                <NavButton id="analyzer" label="Security Audit" icon={FileText} activeTab={activeTab} setTab={setActiveTab} />
+                <NavButton id="translate" label="Cross-Vendor" icon={ArrowRight} activeTab={activeTab} setTab={setActiveTab} />
+                <NavButton id="greenfield" label="Build Tool" icon={Hammer} activeTab={activeTab} setTab={setActiveTab} />
+              </CollapsibleNavSection>
+            )}
           </nav>
           <div className="p-4 border-t border-gray-900">
             <div className="text-xs text-gray-600 uppercase font-bold mb-2">System Status</div>
@@ -2969,7 +2982,10 @@ function App() {
               <EventStream logs={systemLogHistory} />
             </div>
           )}
-
+          {/* --- TAB: ANALYZER --- */}
+          {['analyzer', 'translate', 'greenfield'].includes(activeTab) && (
+            <ConfigAnalyzer activeTab={activeTab} setActiveTab={setActiveTab} />
+          )}
         </div>
         <HostDetailOverlay 
           host={selectedHost} 

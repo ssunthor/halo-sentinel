@@ -101,6 +101,8 @@ KAFKA_CONF_NETFLOW_V9 = {
 }
 TOPIC_NETFLOW_V9 = os.getenv("KAFKA_NETFLOW_V9_TOPIC", "netflow_raw")
 
+PIPELINE_URL = os.getenv("PIPELINE_URL", "http://localhost:13005")
+
 GEOIP_DB_PATH = "GeoLite2-City.mmdb"
 MAP_TTL_SECONDS = 60
 TOPOLOGY_TTL_SECONDS = 3600
@@ -232,6 +234,23 @@ async def rss_proxy(url: str):
             return Response(content=f"An error occurred while requesting {exc.request.url!r}.", status_code=400)
         except httpx.HTTPStatusError as exc:
             return Response(content=f"Error response {exc.response.status_code} while requesting {exc.request.url!r}.", status_code=exc.response.status_code)
+
+@app.post("/api/feedback")
+async def pipeline_feedback(payload: dict):
+    """
+    Proxies user feedback to the Morpheus pipeline.
+    Expected payload: {"source": "host_id", "features": {...}}
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            # Note: We append /feedback to the PIPELINE_URL
+            url = f"{PIPELINE_URL}/feedback"
+            print(f"📡 Forwarding feedback for {payload.get('source')} to {url}")
+            resp = await client.post(url, json=payload, timeout=10)
+            return resp.json()
+        except Exception as e:
+            print(f"❌ Feedback proxy error: {e}")
+            return {"status": "error", "message": str(e)}
 
 @lru_cache(maxsize=16384)
 def get_site_for_ip(ip_str):
@@ -1336,7 +1355,10 @@ def process_log_into_batch(raw_bytes, batch):
         if score > 2.0 and "volume" in str(cause).lower(): cause = f"Traffic Volume Spike (Port {real_dport})"
         elif score > 5.0 and any(k in str(cause) for k in ["Unknown", "Normal", "Learning"]): cause = f"Anomalous Connection Pattern ({real_dport})"
 
-        batch.add_log(state.KEY_NETFLOW_SCATTER, {"bytes": round(bytes_val, 2), "port": real_dport, "y": round(score, 4), "cause": str(cause), "host": clean_host, "time": timestamp_str})
+        # Extract all features for DFP feedback
+        features = {k: v for k, v in payload.items() if k.startswith("feature_")}
+
+        batch.add_log(state.KEY_NETFLOW_SCATTER, {"bytes": round(bytes_val, 2), "port": real_dport, "y": round(score, 4), "cause": str(cause), "host": clean_host, "time": timestamp_str, "features": features})
         batch.inc_stat(state.KEY_NETFLOW_CAUSES, str(cause), 1)
         if rec_err > 1.0: batch.counts['netflow_anomalies'] += 1
         
@@ -1496,7 +1518,21 @@ def process_log_into_batch(raw_bytes, batch):
                 enriched_data = dg
 
     log_key = state.KEY_FIREWALL_LOGS if category == "Firewall" else state.KEY_LOGS
-    log_payload = {"time": timestamp_str, "host": hostname, "msg": raw_msg[:5000], "priority": "high" if sys_anomaly_score > 3 else "low", "uuid": str(uuid.uuid4()), "is_security_event": is_sec, "anomaly_score": sys_anomaly_score, "category": category}
+    
+    # Extract all features for DFP feedback
+    features = {k: v for k, v in payload.items() if k.startswith("feature_")}
+
+    log_payload = {
+        "time": timestamp_str, 
+        "host": hostname, 
+        "msg": raw_msg[:5000], 
+        "priority": "high" if sys_anomaly_score > 3 else "low", 
+        "uuid": str(uuid.uuid4()), 
+        "is_security_event": is_sec, 
+        "anomaly_score": sys_anomaly_score, 
+        "category": category,
+        "features": features
+    }
     log_payload.update(enriched_data)
     batch.add_log(log_key, log_payload)
 

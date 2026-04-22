@@ -32,12 +32,16 @@ if [ -z "$BACKEND_URL" ]; then
     export BACKEND_URL="backend:5174"
 fi
 
+if [ -z "$CONFIG_ANALYZER_URL" ]; then
+    export CONFIG_ANALYZER_URL="config-analyzer-backend:8010"
+fi
+
 # Use envsubst to replace variables in the nginx config
 # We use a temporary file to avoid overwriting the source if it's mounted
-envsubst '${BACKEND_URL}' < /etc/nginx/conf.d/default.conf > /etc/nginx/conf.d/default.conf.tmp
+envsubst '${BACKEND_URL} ${CONFIG_ANALYZER_URL}' < /etc/nginx/conf.d/default.conf > /etc/nginx/conf.d/default.conf.tmp
 mv /etc/nginx/conf.d/default.conf.tmp /etc/nginx/conf.d/default.conf
 
-echo "Nginx config updated with BACKEND_URL=${BACKEND_URL}"
+echo "Nginx config updated with BACKEND_URL=${BACKEND_URL} and CONFIG_ANALYZER_URL=${CONFIG_ANALYZER_URL}"
 
 # Start Nginx
 exec nginx -g "daemon off;"

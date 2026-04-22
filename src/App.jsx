@@ -1962,8 +1962,8 @@ function App() {
             {isMenuVisible('VITE_SHOW_OVERVIEW') && <NavButton id="overview" label="Global Overview" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_HOST_INVENTORY') && <NavButton id="host_inventory" label="Host Inventory" icon={Server} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_VISUALIZATIONS') && (
-                <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} />
-                <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} />
+                <div><NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} />
+                <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /></div>
             )}
             {isMenuVisible('VITE_SHOW_LOG_DNA') && <NavButton id="anomalies" label="System Log DNA" icon={AlertTriangle} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_NETFLOW_DNA') && <NavButton id="dfp" label="Network Netflow DNA" icon={Fingerprint} activeTab={activeTab} setTab={setActiveTab} /> }

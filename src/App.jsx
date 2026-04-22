@@ -111,7 +111,7 @@ const isMenuVisible = (envVar) => {
   // Check runtime window._env_ (injected by entrypoint.sh in prod) 
   // or build-time import.meta.env (Vite default)
   const val = window._env_?.[envVar] || import.meta.env[envVar];
-  
+  console.log(envVar, " : ", val);
   // They are always strings.
   return val === "1";
 };

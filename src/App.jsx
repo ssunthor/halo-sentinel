@@ -1959,8 +1959,20 @@ function App() {
           <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
             {isMenuVisible('VITE_SHOW_OVERVIEW') && <NavButton id="overview" label="Global Overview" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_HOST_INVENTORY') && <NavButton id="host_inventory" label="Host Inventory" icon={Server} activeTab={activeTab} setTab={setActiveTab} /> }
-            {isMenuVisible('VITE_SHOW_GALAXY') && <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} /> }
-            {isMenuVisible('VITE_SHOW_DESTINATIONS') && <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_VISUALIZATIONS') && (
+              <CollapsibleNavSection 
+                label="Visualizations" 
+                icon={Aperture} 
+                activeTab={activeTab} 
+                childIds={['galaxy', 'destinations', 'city', 'hive', 'torus']}
+              >
+                <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} />
+                <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} />
+                <NavButton id="city" label="Cyber City" icon={Building2} activeTab={activeTab} setTab={setActiveTab} />
+                <NavButton id="hive" label="Behavioral Hive" icon={Box} activeTab={activeTab} setTab={setActiveTab} />
+                <NavButton id="torus" label="Traffic Torus" icon={Disc} activeTab={activeTab} setTab={setActiveTab} />
+              </CollapsibleNavSection>
+            )}
             {isMenuVisible('VITE_SHOW_LOG_DNA') && <NavButton id="anomalies" label="System Log DNA" icon={AlertTriangle} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_NETFLOW_DNA') && <NavButton id="dfp" label="Network Netflow DNA" icon={Fingerprint} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_USER_ACTIVITY') && <NavButton id="user" label="User Activity" icon={Users} activeTab={activeTab} setTab={setActiveTab} /> }

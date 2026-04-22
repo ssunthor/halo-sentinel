@@ -110,7 +110,8 @@ const isInTargetSubnet = (ip) => {
 const isMenuVisible = (envVar) => {
   // Vite exposes env vars via import.meta.env
   // They are always strings.
-  return import.meta.env[envVar] === "1";
+  // return import.meta.env[envVar] === "1";
+  return 1;
 };
 
 class ErrorBoundary extends React.Component {

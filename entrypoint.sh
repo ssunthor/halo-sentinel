@@ -33,10 +33,10 @@ if [ -z "$BACKEND_URL" ]; then
 fi
 
 if [ -z "$CONFIG_ANALYZER_URL" ]; then
-    export CONFIG_ANALYZER_URL="config-analyzer-backend:8010"
+    export CONFIG_ANALYZER_URL="config-analyzer:8010"
 fi
 
-# Use envsubst to replace variables in the nginx config
+# Use envsubst to replace variables in the nginx configs
 # We use a temporary file to avoid overwriting the source if it's mounted
 envsubst '${BACKEND_URL} ${CONFIG_ANALYZER_URL}' < /etc/nginx/conf.d/default.conf > /etc/nginx/conf.d/default.conf.tmp
 mv /etc/nginx/conf.d/default.conf.tmp /etc/nginx/conf.d/default.conf

@@ -9,7 +9,7 @@ import {
   Server, Network, AlertTriangle, Map as MapIcon, Settings, 
   ChevronRight, ChevronLeft, ChevronDown, Monitor, Clock, Filter, Search, X, ShieldAlert, ShieldCheck,
   Play, Pause, ArrowRight, Ban, FileText, MousePointerClick, PieChart as PieIcon, BarChart2, Zap, Share2,
-  Fingerprint, Info, RefreshCw, Orbit, Aperture, Sparkles, Loader2,
+  Fingerprint, Info, RefreshCw, Orbit, Aperture, Sparkles, Loader2, Hammer, FileSearch, 
   ArrowUpRight, ArrowDownLeft, ExternalLink, Download, Box, Building2, Disc, History, TrendingUp
 } from 'lucide-react';
 import Globe from 'react-globe.gl';

@@ -16,13 +16,13 @@ const MetricCard = ({ label, value, icon: Icon, color }) => (
   </div>
 );
 
-const PolicyGenerator = ({ addChatMessage }) => {
+const PolicyGenerator = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedPolicy, setGeneratedPolicy] = useState(null);
 
   const handleGenerate = () => {
     setIsGenerating(true);
-    addChatMessage("Generating Greenfield hardening policy based on global best practices...", "ai");
+    
     setTimeout(() => {
         setIsGenerating(false);
         setGeneratedPolicy({
@@ -30,7 +30,7 @@ const PolicyGenerator = ({ addChatMessage }) => {
             rules: 154,
             compliance: ["CIS Benchmark v8", "NIST 800-53", "PCI-DSS 4.0"]
         });
-        addChatMessage("Greenfield policy generated successfully. You can now download or apply it to your staging environment.", "ai");
+        
     }, 2000);
   };
 

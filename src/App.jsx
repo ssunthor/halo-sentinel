@@ -1972,8 +1972,8 @@ function App() {
             {isMenuVisible('VITE_SHOW_NETWORK') && <NavButton id="network" label="Network & Firewall" icon={MapIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_NETBOX') && <NavButton id="netbox" label="Netbox CVEs" icon={Shield} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_RAW_DATA') && <NavButton id="raw" label="Raw Data" icon={Terminal} activeTab={activeTab} setTab={setActiveTab} /> }
-            {isMenuVisible('VITE_SHOW_CONFIG_ANALYZER') && <NavButton id="analyzer" label="Security Audit" icon={FileText} activeTab={activeTab} setTab={setActiveTab} />}
-            {isMenuVisible('VITE_SHOW_CONFIG_TRANSLATE') && <NavButton id="translate" label="Cross-Vendor" icon={ArrowRight} activeTab={activeTab} setTab={setActiveTab} />}
+            {isMenuVisible('VITE_SHOW_CONFIG_ANALYZER') && <NavButton id="analyzer" label="Config Analyzer" icon={FileText} activeTab={activeTab} setTab={setActiveTab} />}
+            {isMenuVisible('VITE_SHOW_CONFIG_TRANSLATOR') && <NavButton id="translate" label="Config Translator" icon={ArrowRight} activeTab={activeTab} setTab={setActiveTab} />}
             {isMenuVisible('VITE_SHOW_CONFIG_BUILD_TOOL') && <NavButton id="greenfield" label="Build Tool" icon={Hammer} activeTab={activeTab} setTab={setActiveTab} />}
           </nav>
           <div className="p-4 border-t border-gray-900">

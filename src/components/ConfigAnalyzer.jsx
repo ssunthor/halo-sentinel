@@ -553,6 +553,46 @@ const SecurityAudit = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleDownloadFullReport = () => {
+    if (issues.length === 0) return;
+
+    let markdown = `# Security Audit Report\n\n`;
+    markdown += `**Framework:** ${selectedFramework}\n`;
+    markdown += `**Date:** ${new Date().toLocaleString()}\n`;
+    markdown += `**Total Issues:** ${issues.length}\n\n`;
+
+    markdown += `## Summary\n\n`;
+    markdown += `- **High:** ${issues.filter(i => i.severity === 'High').length}\n`;
+    markdown += `- **Medium:** ${issues.filter(i => i.severity === 'Medium').length}\n`;
+    markdown += `- **Low:** ${issues.filter(i => i.severity === 'Low').length}\n\n`;
+
+    markdown += `--- \n\n`;
+
+    issues.forEach((issue, index) => {
+      markdown += `### ${index + 1}. ${issue.title} [${issue.severity}]\n\n`;
+      markdown += `**File:** ${issue.file}\n\n`;
+      markdown += `#### Description\n${issue.description}\n\n`;
+      markdown += `#### Remediation Strategy\n${issue.strategy}\n\n`;
+      if (issue.originalCode) {
+        markdown += `#### Original Config\n\`\`\`\n${issue.originalCode}\n\`\`\`\n\n`;
+      }
+      if (issue.proposedCode) {
+        markdown += `#### Proposed Remediation\n\`\`\`\n${issue.proposedCode}\n\`\`\`\n\n`;
+      }
+      markdown += `---\n\n`;
+    });
+
+    const blob = new Blob([markdown], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `security-audit-report.md`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const removeFile = (id) => {
     setUploadedFiles(prev => {
       const updated = prev.filter(f => f.id !== id);
@@ -635,10 +675,17 @@ const SecurityAudit = () => {
         {/* ISSUE LISTING (Miniature) */}
         {analysisStatus === 'complete' && (
           <div className="h-1/3 flex flex-col bg-[#121212] border border-gray-800 rounded-lg shadow-lg overflow-hidden shrink-0">
-            <div className="p-3 border-b border-gray-800 bg-[#0a0a0a]">
+            <div className="p-3 border-b border-gray-800 bg-[#0a0a0a] flex justify-between items-center">
               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
                 <ShieldAlert size={14} className="text-red-500" /> Findings ({issues.length})
               </span>
+              <button 
+                onClick={handleDownloadFullReport}
+                className="p-1 hover:text-blue-400 text-gray-500 transition-colors"
+                title="Download Report"
+              >
+                <Download size={14} />
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
               {issues.map(issue => (
@@ -683,19 +730,27 @@ const SecurityAudit = () => {
                 </div>
 
                 {analysisStatus === 'complete' && (
-                    <div className="grid grid-cols-3 gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
-                        <div className="bg-[#0a0a0a] p-4 rounded-lg border border-red-900/30 flex flex-col">
-                            <span className="text-[9px] font-bold text-red-500 uppercase mb-1">Critical/High</span>
-                            <span className="text-3xl font-black text-white">{issues.filter(i=>i.severity==='High').length}</span>
+                    <div className="space-y-6">
+                        <div className="grid grid-cols-3 gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
+                            <div className="bg-[#0a0a0a] p-4 rounded-lg border border-red-900/30 flex flex-col">
+                                <span className="text-[9px] font-bold text-red-500 uppercase mb-1">Critical/High</span>
+                                <span className="text-3xl font-black text-white">{issues.filter(i=>i.severity==='High').length}</span>
+                            </div>
+                            <div className="bg-[#0a0a0a] p-4 rounded-lg border border-orange-900/30 flex flex-col">
+                                <span className="text-[9px] font-bold text-orange-500 uppercase mb-1">Medium Risk</span>
+                                <span className="text-3xl font-black text-white">{issues.filter(i=>i.severity==='Medium').length}</span>
+                            </div>
+                            <div className="bg-[#0a0a0a] p-4 rounded-lg border border-green-900/30 flex flex-col">
+                                <span className="text-[9px] font-bold text-green-500 uppercase mb-1">Compliant</span>
+                                <span className="text-3xl font-black text-white">{issues.filter(i=>i.severity==='Low').length}</span>
+                            </div>
                         </div>
-                        <div className="bg-[#0a0a0a] p-4 rounded-lg border border-orange-900/30 flex flex-col">
-                            <span className="text-[9px] font-bold text-orange-500 uppercase mb-1">Medium Risk</span>
-                            <span className="text-3xl font-black text-white">{issues.filter(i=>i.severity==='Medium').length}</span>
-                        </div>
-                        <div className="bg-[#0a0a0a] p-4 rounded-lg border border-green-900/30 flex flex-col">
-                            <span className="text-[9px] font-bold text-green-500 uppercase mb-1">Compliant</span>
-                            <span className="text-3xl font-black text-white">{issues.filter(i=>i.severity==='Low').length}</span>
-                        </div>
+                        <button 
+                            onClick={handleDownloadFullReport}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded text-[11px] font-bold uppercase transition-all w-full justify-center"
+                        >
+                            <Download size={14} /> Download Full Audit Report (.md)
+                        </button>
                     </div>
                 )}
 

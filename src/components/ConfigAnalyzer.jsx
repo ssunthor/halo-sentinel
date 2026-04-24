@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   FileText, Activity, ShieldAlert, AlertTriangle, ShieldCheck, 
-  Loader2, Upload, X, File, Code, Settings, Play, Terminal, Send, Search,
-  Server, Database, Globe, Cpu, ChevronRight, ChevronDown, Download, Edit3, Save
+  Loader2, Upload, X, File as FileIcon, Code, Settings, Play, Terminal, Send, Search,
+  Server, Database, Globe, Cpu, ChevronRight, ChevronDown, Download, Edit3, Save,
+  CheckCircle2, RefreshCcw, CheckSquare, Square, Eye, ListFilter, LogOut
 } from 'lucide-react';
 
 // --- SHARED UI COMPONENTS ---
@@ -41,8 +42,8 @@ const FRAMEWORKS = [
 
 // --- INTERNAL COMPONENTS ---
 
-const IngestionTabs = ({ onFileUpload, onApiIngest, loading }) => {
-  const [activeTab, setActiveTab] = useState(0);
+const IngestionTabs = ({ onFileUpload, onApiIngest, loading, error, isConnected, deviceHostname, onDisconnect, onReconnect }) => {
+  const [activeTab, setActiveTab] = useState(isConnected ? 1 : 0);
   const [dragActive, setDragActive] = useState(false);
   const [deviceType, setDeviceType] = useState('cisco-fmc');
   const [hostname, setHostname] = useState('');
@@ -53,7 +54,7 @@ const IngestionTabs = ({ onFileUpload, onApiIngest, loading }) => {
   const handleDrag = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (loading) return; // Prevent drag actions when loading
+    if (loading) return; 
     if (e.type === "dragenter" || e.type === "dragover") setDragActive(true);
     else if (e.type === "dragleave") setDragActive(false);
   };
@@ -62,14 +63,14 @@ const IngestionTabs = ({ onFileUpload, onApiIngest, loading }) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (loading) return; // Prevent drop actions when loading
+    if (loading) return; 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       onFileUpload(Array.from(e.dataTransfer.files));
     }
   };
 
   const handleChange = (e) => {
-    if (loading) return; // Prevent file selection when loading
+    if (loading) return; 
     if (e.target.files && e.target.files.length > 0) {
       onFileUpload(Array.from(e.target.files));
     }
@@ -78,28 +79,30 @@ const IngestionTabs = ({ onFileUpload, onApiIngest, loading }) => {
   return (
     <div className="flex flex-col bg-[#121212] border border-gray-800 rounded-lg overflow-hidden shrink-0">
       <div className="flex border-b border-gray-800 bg-[#0a0a0a]">
-        <button 
-          onClick={() => setActiveTab(0)}
-          disabled={loading}
-          className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-            activeTab === 0 ? 'text-blue-500 bg-blue-500/5' : 'text-gray-500 hover:text-gray-300'
-          } ${loading ? 'cursor-not-allowed opacity-50' : ''}`}
-        >
-          Upload Files
-        </button>
+        {!isConnected && (
+          <button 
+            onClick={() => setActiveTab(0)}
+            disabled={loading}
+            className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+              activeTab === 0 ? 'text-blue-500 bg-blue-500/5' : 'text-gray-500 hover:text-gray-300'
+            } ${loading ? 'cursor-not-allowed opacity-50' : ''}`}
+          >
+            Upload Files
+          </button>
+        )}
         <button 
           onClick={() => setActiveTab(1)}
           disabled={loading}
           className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-            activeTab === 1 ? 'text-blue-500 bg-blue-500/5' : 'text-gray-500 hover:text-gray-300'
+            activeTab === 1 || isConnected ? 'text-blue-500 bg-blue-500/5' : 'text-gray-500 hover:text-gray-300'
           } ${loading ? 'cursor-not-allowed opacity-50' : ''}`}
         >
-          Import from Device
+          {isConnected ? 'Connected Device' : 'Import from Device'}
         </button>
       </div>
 
       <div className="p-3">
-        {activeTab === 0 ? (
+        {activeTab === 0 && !isConnected ? (
           <div
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
@@ -120,6 +123,34 @@ const IngestionTabs = ({ onFileUpload, onApiIngest, loading }) => {
             )}
             <div className="text-[11px] font-bold text-gray-300 uppercase tracking-tight">Drop config files here</div>
             <div className="text-[9px] text-gray-500 mt-1">Supports .txt, .cfg, .json</div>
+          </div>
+        ) : isConnected ? (
+          <div className="space-y-3 py-2">
+            <div className="flex items-center gap-3 p-3 bg-green-500/5 border border-green-500/20 rounded-lg">
+              <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center text-green-500">
+                <CheckCircle2 size={18} />
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <div className="text-[10px] font-bold text-green-500 uppercase">Device Connected</div>
+                <div className="text-[11px] text-gray-300 truncate font-mono">{deviceHostname}</div>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button 
+                onClick={onDisconnect}
+                disabled={loading}
+                className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded text-[9px] font-bold uppercase transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <LogOut size={12} /> Change Device
+              </button>
+              <button 
+                onClick={onReconnect}
+                disabled={loading}
+                className="flex-1 py-2 bg-[#1a1a1a] border border-gray-700 hover:bg-gray-800 text-gray-300 rounded text-[9px] font-bold uppercase transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCcw size={12} />} Reconnect
+              </button>
+            </div>
           </div>
         ) : (
           <div className="space-y-2">
@@ -160,6 +191,12 @@ const IngestionTabs = ({ onFileUpload, onApiIngest, loading }) => {
                 className="flex-1 bg-black border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
+            {error && (
+              <div className="p-2 bg-red-900/20 border border-red-500/30 rounded flex items-start gap-2">
+                <AlertTriangle size={12} className="text-red-500 shrink-0 mt-0.5" />
+                <span className="text-[10px] text-red-400 leading-tight">{error}</span>
+              </div>
+            )}
             <button 
               onClick={() => onApiIngest(deviceType, hostname, username, apiKey)}
               disabled={loading}
@@ -186,7 +223,7 @@ const FileItem = ({ file, isActive, isLoading, metadata, onSelect, onRemove }) =
     >
       <div className="flex items-center justify-between w-full">
         <div className="flex items-center gap-2 truncate text-gray-300">
-          {isLoading ? <Loader2 size={12} className="animate-spin text-blue-500" /> : <File size={12} className={isActive ? "text-blue-400" : "text-gray-500"} />}
+          {isLoading ? <Loader2 size={12} className="animate-spin text-blue-500" /> : <FileIcon size={12} className={isActive ? "text-blue-400" : "text-gray-500"} />}
           <span className={`truncate text-[11px] font-medium ${isActive ? 'text-white' : ''}`}>{file.name}</span>
         </div>
         <button onClick={(e) => { e.stopPropagation(); onRemove(file.id); }} className="text-gray-600 hover:text-red-500 p-0.5"><X size={12} /></button>
@@ -238,6 +275,182 @@ const FilePreviewer = ({ selectedFile }) => {
       </div>
     </div>
   );
+};
+
+const PolicyBrowser = ({ policies, selectedIds, onToggleAll, onToggleOne, onPreview, previewData, previewLoadingId, hostname, loading }) => {
+    const [focusedPolicy, setFocusedPolicy] = useState(null);
+
+    const handleRowClick = (policy) => {
+        setFocusedPolicy(policy);
+        if (!previewData[policy.id]) {
+            onPreview(policy);
+        }
+    };
+
+    // Helper to parse rules string into array of objects for table
+    const parseRules = (text) => {
+        if (!text) return [];
+        const lines = text.split('\n');
+        const rules = [];
+        let currentRule = null;
+
+        lines.forEach(line => {
+            if (line.startsWith('Rule: ')) {
+                if (currentRule) rules.push(currentRule);
+                const namePart = line.substring(6).split(' (')[0].trim();
+                currentRule = { name: namePart, action: '', from: '', to: '', ports: '' };
+            } else if (currentRule && line.trim().startsWith('Action: ')) {
+                currentRule.action = line.trim().substring(8).trim();
+            } else if (currentRule && line.trim().startsWith('Source: ')) {
+                currentRule.from = line.trim().substring(8).trim();
+            } else if (currentRule && line.trim().startsWith('Destination: ')) {
+                currentRule.to = line.trim().substring(13).trim();
+            } else if (currentRule && line.trim().startsWith('Ports: ')) {
+                currentRule.ports = line.trim().substring(7).trim();
+            }
+        });
+        if (currentRule) rules.push(currentRule);
+        
+        return rules;
+    };
+
+    const previewRules = focusedPolicy ? parseRules(previewData[focusedPolicy.id]) : [];
+
+    return (
+        <div className="flex-1 flex flex-col bg-[#050505] animate-in fade-in duration-300 overflow-hidden">
+            {/* Header Area */}
+            <div className="p-6 border-b border-gray-800 bg-[#0a0a0a] flex justify-between items-end shrink-0">
+                <div>
+                    <h2 className="text-xl font-black text-white mb-1 flex items-center gap-3">
+                        <Server className="text-blue-500" size={24} /> 
+                        POLICY DISCOVERY
+                    </h2>
+                    <p className="text-[11px] text-gray-500 font-mono flex items-center gap-2">
+                        Connected Host: <span className="text-gray-300">{hostname}</span> 
+                        <span className="text-gray-700">|</span> 
+                        Discovered: <span className="text-blue-400 font-bold">{policies.length}</span>
+                    </p>
+                </div>
+                <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest italic">
+                    Alpha Version 0.1.0
+                </div>
+            </div>
+
+            {/* Master-Detail Split */}
+            <div className="flex-1 flex min-h-0">
+                {/* Left: Policy List (Narrower) */}
+                <div className="w-[320px] flex flex-col border-r border-gray-800 h-full overflow-hidden bg-[#0d0d0d]">
+                    <div className="px-4 py-3 border-b border-gray-800 bg-[#0a0a0a] flex items-center shrink-0">
+                        <button onClick={onToggleAll} disabled={loading} className="p-1 hover:text-white text-gray-500 mr-3 transition-colors disabled:opacity-50">
+                            {selectedIds.size === policies.length && policies.length > 0 ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} />}
+                        </button>
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest flex-1">Policies</span>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+                        {policies.map(policy => {
+                            const isSelected = selectedIds.has(policy.id);
+                            const isFocused = focusedPolicy?.id === policy.id;
+                            
+                            return (
+                                <div 
+                                    key={policy.id}
+                                    onClick={() => handleRowClick(policy)}
+                                    className={`flex items-center px-3 py-2 mb-1 rounded cursor-pointer border transition-all ${
+                                        isFocused ? 'bg-blue-500/10 border-blue-500/30 shadow-sm shadow-blue-500/5' : 'bg-[#121212] border-transparent hover:border-gray-700'
+                                    }`}
+                                >
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); onToggleOne(policy.id); }} 
+                                        disabled={loading}
+                                        className="p-1 hover:text-white text-gray-500 mr-2 transition-colors disabled:opacity-50"
+                                    >
+                                        {isSelected ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} />}
+                                    </button>
+                                    <div className="flex-1 min-w-0">
+                                        <div className={`text-xs font-medium truncate ${isFocused ? 'text-white' : 'text-gray-300'}`}>{policy.name}</div>
+                                        <div className="text-[9px] text-gray-600 font-mono truncate">{policy.id}</div>
+                                    </div>
+                                    <div className="ml-2">
+                                        {previewLoadingId === policy.id ? (
+                                            <Loader2 size={12} className="animate-spin text-blue-500" />
+                                        ) : (
+                                            <ChevronRight size={14} className={isFocused ? "text-blue-500" : "text-gray-700"} />
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Right: Detail Table Pane */}
+                <div className="flex-1 flex flex-col h-full bg-[#050505] min-w-0">
+                    {focusedPolicy ? (
+                        <>
+                            <div className="px-6 py-3 border-b border-gray-800 bg-[#0a0a0a] flex justify-between items-center shrink-0">
+                                <h3 className="text-[11px] font-bold text-gray-300 flex items-center gap-2 uppercase tracking-tight">
+                                    <ListFilter size={14} className="text-blue-500" /> Policy Rules: {focusedPolicy.name}
+                                </h3>
+                                <div className="text-[9px] text-gray-500 font-mono">
+                                    {previewRules.length} Entries Loaded
+                                </div>
+                            </div>
+                            <div className="flex-1 overflow-auto custom-scrollbar">
+                                {previewLoadingId === focusedPolicy.id ? (
+                                    <div className="h-full flex flex-col items-center justify-center text-gray-500 space-y-3">
+                                        <Loader2 size={24} className="animate-spin text-blue-500" />
+                                        <span className="text-xs font-mono">Parsing normalized data...</span>
+                                    </div>
+                                ) : previewRules.length > 0 ? (
+                                    <table className="w-full border-collapse">
+                                        <thead className="sticky top-0 bg-[#0a0a0a] z-10 border-b border-gray-800 shadow-sm">
+                                            <tr>
+                                                <th className="px-4 py-2 text-left text-[9px] font-bold text-gray-500 uppercase">Name</th>
+                                                <th className="px-4 py-2 text-left text-[9px] font-bold text-gray-500 uppercase w-20">Action</th>
+                                                <th className="px-4 py-2 text-left text-[9px] font-bold text-gray-500 uppercase">Source</th>
+                                                <th className="px-4 py-2 text-left text-[9px] font-bold text-gray-500 uppercase">Destination</th>
+                                                <th className="px-4 py-2 text-left text-[9px] font-bold text-gray-500 uppercase">Ports</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-800/50">
+                                            {previewRules.map((rule, idx) => (
+                                                <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
+                                                    <td className="px-4 py-2 text-[10px] font-medium text-gray-300 truncate max-w-[200px]">{rule.name}</td>
+                                                    <td className="px-4 py-2">
+                                                        <span className={`px-1.5 py-0.5 rounded-[3px] text-[8px] font-bold uppercase ${
+                                                            rule.action === 'Allow' ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'
+                                                        }`}>
+                                                            {rule.action}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-[10px] text-gray-500 font-mono truncate max-w-[150px]">{rule.from}</td>
+                                                    <td className="px-4 py-2 text-[10px] text-gray-500 font-mono truncate max-w-[150px]">{rule.to}</td>
+                                                    <td className="px-4 py-2 text-[10px] text-gray-400 font-mono truncate max-w-[120px]">{rule.ports}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-gray-600 text-xs italic">
+                                        No preview data available for this policy.
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    ) : (
+                        <div className="flex-1 flex flex-col items-center justify-center text-gray-600 p-8 text-center space-y-4">
+                            <ShieldCheck size={48} className="text-gray-800" />
+                            <div>
+                                <div className="text-sm font-bold text-gray-400 mb-1">Select a policy from the list</div>
+                                <div className="text-xs max-w-xs mx-auto text-gray-500">The rules will be displayed here in a structured table format for your review.</div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 };
 
 // --- REMEDIATION WORKSPACE COMPONENT ---
@@ -362,10 +575,15 @@ const SecurityAudit = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [analysisStatus, setAnalysisStatus] = useState('idle'); // idle | analyzing | complete
-  const [previewLoadingId, setPreviewLoadingId] = useState(null);
   const [selectedFramework, setSelectedFramework] = useState(FRAMEWORKS[0]);
   const [issues, setIssues] = useState([]);
   const [fileMetadata, setFileMetadata] = useState({});
+  const [availablePolicies, setAvailablePolicies] = useState([]);
+  const [selectedPolicyIds, setSelectedPolicyIds] = useState(new Set());
+  const [policyPreviews, setPolicyPreviews] = useState({}); 
+  const [previewLoadingId, setPreviewLoadingId] = useState(null);
+  const [ingestError, setIngestError] = useState(null);
+  const [connectionInfo, setConnectionInfo] = useState(null);
 
   const handleFileUpload = (files) => {
     files.forEach((file) => {
@@ -392,13 +610,11 @@ const SecurityAudit = () => {
 
   const handleApiIngest = async (deviceType, hostname, username, apiKey) => {
     setAnalysisStatus('analyzing');
+    setIngestError(null);
     
     try {
-      // 1. Map device type to backend vendor string
-      let vendor = deviceType;
-      if (deviceType === 'cisco-fmc') vendor = 'cisco';
+      let vendor = deviceType === 'cisco-fmc' ? 'cisco' : deviceType;
       
-      // 2. Fetch Policies
       const policyRes = await fetch('/analyzer/v1/fetch/policies', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -411,15 +627,31 @@ const SecurityAudit = () => {
         })
       });
       
-      if (!policyRes.ok) throw new Error(`Failed to fetch policies: ${await policyRes.text()}`);
       const policyData = await policyRes.json();
+      if (!policyRes.ok) throw new Error(policyData.detail || policyData.message || "Failed to fetch policies");
       
       if (!policyData.policies || policyData.policies.length === 0) {
           throw new Error("No access policies found on the device.");
       }
       
-      // 3. Grab rules for the first policy (for simplicity in this workflow)
-      const firstPolicy = policyData.policies[0];
+      setAvailablePolicies(policyData.policies);
+      setSelectedPolicyIds(new Set()); // Reset selection
+      setConnectionInfo({ vendor, hostname, username, apiKey });
+      setPolicyPreviews({}); // clear previews for new connection
+      setSelectedFile(null);
+      setSelectedIssue(null);
+      
+    } catch (err) {
+       console.error("Ingest Error:", err);
+       setIngestError(err.message);
+    } finally {
+       setAnalysisStatus('idle');
+    }
+  };
+
+  const fetchPolicyRules = async (policyId) => {
+      if (!connectionInfo) return null;
+      const { vendor, hostname, username, apiKey } = connectionInfo;
       
       const rulesRes = await fetch('/analyzer/v1/fetch/rules', {
         method: 'POST',
@@ -430,46 +662,123 @@ const SecurityAudit = () => {
           username: username,
           password: apiKey,
           verify_ssl: false,
-          policy_id: firstPolicy.id
+          policy_id: policyId
         })
       });
       
-      if (!rulesRes.ok) throw new Error(`Failed to fetch rules: ${await rulesRes.text()}`);
       const rulesData = await rulesRes.json();
+      if (!rulesRes.ok) throw new Error(rulesData.detail || rulesData.message || "Failed to fetch rules");
+      return rulesData.normalized_configuration;
+  };
+
+  const handlePreviewPolicy = async (policy) => {
+      if (policyPreviews[policy.id] || !connectionInfo) return;
       
-      const content = rulesData.normalized_configuration;
-      const fileName = `${firstPolicy.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_rules.txt`;
-      
-      const fileObj = {
-          id: Math.random().toString(36).substr(2, 9),
-          name: fileName,
-          size: content.length,
-          content: content,
-          rawFile: new File([content], fileName, { type: "text/plain" })
-      };
-      
-      setUploadedFiles([fileObj]);
-      setSelectedFile(fileObj);
-      
+      setPreviewLoadingId(policy.id);
+      try {
+          const content = await fetchPolicyRules(policy.id);
+          setPolicyPreviews(prev => ({...prev, [policy.id]: content}));
+      } catch (err) {
+          console.error("Preview Fetch Error:", err);
+          setPolicyPreviews(prev => ({...prev, [policy.id]: `Error fetching rules: ${err.message}`}));
+      } finally {
+          setPreviewLoadingId(null);
+      }
+  };
+
+  const handleTogglePolicyAll = () => {
+    if (selectedPolicyIds.size === availablePolicies.length) {
+        setSelectedPolicyIds(new Set());
+    } else {
+        setSelectedPolicyIds(new Set(availablePolicies.map(p => p.id)));
+    }
+  };
+
+  const handleTogglePolicyOne = (id) => {
+    const newSet = new Set(selectedPolicyIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedPolicyIds(newSet);
+  };
+
+  const handleAnalyzeFromDiscovery = async () => {
+    const selectedList = availablePolicies.filter(p => selectedPolicyIds.has(p.id));
+    if (selectedList.length === 0 || !connectionInfo) return;
+
+    setAnalysisStatus('analyzing');
+    setIngestError(null);
+    
+    try {
+        let combinedContent = `================================================================================\n`;
+        combinedContent += `FMC CONNECTION: ${connectionInfo.hostname} (${connectionInfo.vendor})\n`;
+        combinedContent += `USER: ${connectionInfo.username}\n`;
+        combinedContent += `INGESTED ON: ${new Date().toLocaleString()}\n`;
+        combinedContent += `================================================================================\n\n`;
+
+        for (const policy of selectedList) {
+            let content = policyPreviews[policy.id];
+            if (!content) {
+                content = await fetchPolicyRules(policy.id);
+                setPolicyPreviews(prev => ({...prev, [policy.id]: content}));
+            }
+            
+            combinedContent += `================================================================================\n`;
+            combinedContent += `POLICY: ${policy.name}\n`;
+            combinedContent += `ID: ${policy.id}\n`;
+            combinedContent += `--------------------------------------------------------------------------------\n`;
+            combinedContent += `${content}\n\n`;
+        }
+
+        const fileName = `${connectionInfo.hostname.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_consolidated_policies.txt`;
+        const fileObj = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: fileName,
+            size: combinedContent.length,
+            content: combinedContent,
+            rawFile: new File([combinedContent], fileName, { type: "text/plain" })
+        };
+
+        const allFiles = [...uploadedFiles, fileObj];
+        setUploadedFiles(allFiles);
+        setSelectedFile(fileObj);
+        setAvailablePolicies([]); 
+        
+        await executeAnalysis(allFiles, selectedFramework);
+        
     } catch (err) {
-       console.error("Ingest Error:", err);
-    } finally {
+       console.error("Bulk Rule Ingest Error:", err);
+       setIngestError(err.message);
        setAnalysisStatus('idle');
     }
   };
 
-  const startAnalysis = async () => {
-    if (uploadedFiles.length === 0) return;
+  const handleDisconnect = () => {
+      setConnectionInfo(null);
+      setAvailablePolicies([]);
+      setPolicyPreviews({});
+      setIngestError(null);
+      setSelectedPolicyIds(new Set());
+  };
+
+  const handleReconnect = () => {
+      if (connectionInfo) {
+          const deviceType = connectionInfo.vendor === 'cisco' ? 'cisco-fmc' : connectionInfo.vendor;
+          handleApiIngest(deviceType, connectionInfo.hostname, connectionInfo.username, connectionInfo.apiKey);
+      }
+  };
+
+  const executeAnalysis = async (filesToAnalyze, framework) => {
     setAnalysisStatus('analyzing');
     setIssues([]);
     setSelectedIssue(null);
+    setSelectedFile(null); // Clear selected file to show dashboard summary
     
     try {
       const formData = new FormData();
-      uploadedFiles.forEach(file => {
+      filesToAnalyze.forEach(file => {
         formData.append('files', file.rawFile);
       });
-      formData.append('framework', selectedFramework);
+      formData.append('framework', framework);
 
       const response = await fetch('/analyzer/v1/configs/analyze', {
         method: 'POST',
@@ -536,9 +845,15 @@ const SecurityAudit = () => {
     }
   };
 
+  const startAnalysis = () => {
+    if (uploadedFiles.length === 0) return;
+    executeAnalysis(uploadedFiles, selectedFramework);
+  };
+
   const handleIssueClick = (issue) => {
     setSelectedIssue(issue);
     setSelectedFile(null);
+    setAvailablePolicies([]);
   };
 
   const handleDownloadRemediation = (filename, content) => {
@@ -606,6 +921,10 @@ const SecurityAudit = () => {
     }
   };
 
+  // Determine if we should show the Execute Audit controls in sidebar
+  const showAuditControls = uploadedFiles.length > 0 || availablePolicies.length > 0;
+  const isDiscoveryMode = availablePolicies.length > 0 && !selectedFile && !selectedIssue;
+
   return (
     <div className="flex flex-1 gap-4 overflow-hidden h-full animate-in fade-in slide-in-from-bottom-2 duration-300">
       {/* LEFT COLUMN: Controls & Files */}
@@ -614,6 +933,11 @@ const SecurityAudit = () => {
           onFileUpload={handleFileUpload}
           onApiIngest={handleApiIngest}
           loading={analysisStatus === 'analyzing'}
+          error={ingestError}
+          isConnected={!!connectionInfo}
+          deviceHostname={connectionInfo?.hostname}
+          onDisconnect={handleDisconnect}
+          onReconnect={handleReconnect}
         />
 
         <div className="flex-1 flex flex-col bg-[#121212] border border-gray-800 rounded-lg shadow-lg overflow-hidden min-h-0">
@@ -636,14 +960,14 @@ const SecurityAudit = () => {
                         file={file}
                         isActive={(selectedFile?.id === file.id)}
                         metadata={fileMetadata}
-                        onSelect={(f) => { setSelectedIssue(null); setSelectedFile(f); }}
+                        onSelect={(f) => { setSelectedIssue(null); setSelectedFile(f); setAvailablePolicies([]); }}
                         onRemove={removeFile}
                     />
                 ))
             )}
           </div>
 
-          {uploadedFiles.length > 0 && (
+          {showAuditControls && (
             <div className="p-3 border-t border-gray-800 bg-[#0a0a0a] space-y-3">
               <div className="space-y-1">
                 <label className="text-[9px] font-bold text-gray-500 uppercase flex items-center gap-1.5"><Settings size={12}/> Policy Framework</label>
@@ -651,23 +975,39 @@ const SecurityAudit = () => {
                   value={selectedFramework}
                   onChange={(e) => setSelectedFramework(e.target.value)}
                   disabled={analysisStatus === 'analyzing'}
-                  className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {FRAMEWORKS.map(fw => <option key={fw} value={fw}>{fw}</option>)}
                 </select>
               </div>
-              <button 
-                onClick={startAnalysis} 
-                disabled={analysisStatus === 'analyzing'}
-                className={`w-full py-2.5 rounded text-[11px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${
-                    analysisStatus === 'analyzing'
+              
+              {isDiscoveryMode ? (
+                <button 
+                  onClick={handleAnalyzeFromDiscovery} 
+                  disabled={analysisStatus === 'analyzing' || selectedPolicyIds.size === 0}
+                  className={`w-full py-2.5 rounded text-[11px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${
+                    analysisStatus === 'analyzing' || selectedPolicyIds.size === 0
+                    ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
+                    : 'bg-green-600 hover:bg-green-500 text-black shadow-lg shadow-green-900/20'
+                  }`}
+                >
+                  {analysisStatus === 'analyzing' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                  Analyze Selected ({selectedPolicyIds.size})
+                </button>
+              ) : (
+                <button 
+                  onClick={startAnalysis} 
+                  disabled={analysisStatus === 'analyzing' || uploadedFiles.length === 0}
+                  className={`w-full py-2.5 rounded text-[11px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${
+                    analysisStatus === 'analyzing' || uploadedFiles.length === 0
                     ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
                     : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20'
-                }`}
-              >
-                {analysisStatus === 'analyzing' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-                Execute Audit
-              </button>
+                  }`}
+                >
+                  {analysisStatus === 'analyzing' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                  Analyze Files
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -691,7 +1031,7 @@ const SecurityAudit = () => {
               {issues.map(issue => (
                 <div 
                   key={issue.id} 
-                  onClick={() => { setSelectedIssue(issue); setSelectedFile(null); }}
+                  onClick={() => handleIssueClick(issue)}
                   className={`p-2 rounded cursor-pointer border transition-all ${selectedIssue?.id === issue.id ? 'bg-red-500/10 border-red-500/50 shadow-sm' : 'bg-black border-gray-800 hover:border-gray-700'}`}
                 >
                    <div className="flex justify-between items-center mb-1"><SeverityBadge severity={issue.severity} /></div>
@@ -705,7 +1045,19 @@ const SecurityAudit = () => {
 
       {/* RIGHT COLUMN: Workspace */}
       <div className="flex-1 flex flex-col bg-[#121212] border border-gray-800 rounded-lg shadow-lg overflow-hidden h-full">
-        {selectedIssue ? (
+        {isDiscoveryMode ? (
+            <PolicyBrowser 
+                policies={availablePolicies} 
+                selectedIds={selectedPolicyIds}
+                onToggleAll={handleTogglePolicyAll}
+                onToggleOne={handleTogglePolicyOne}
+                onPreview={handlePreviewPolicy}
+                previewData={policyPreviews}
+                previewLoadingId={previewLoadingId}
+                hostname={connectionInfo?.hostname}
+                loading={analysisStatus === 'analyzing'}
+            />
+        ) : selectedIssue ? (
           <RemediationWorkspace 
             issue={selectedIssue} 
             onDownload={handleDownloadRemediation}
@@ -780,5 +1132,5 @@ const SecurityAudit = () => {
     </div>
   );
 };
-export default SecurityAudit;
 
+export default SecurityAudit;

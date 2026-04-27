@@ -243,7 +243,7 @@ async def rss_proxy(url: str):
         except httpx.HTTPStatusError as exc:
             return Response(content=f"Error response {exc.response.status_code} while requesting {exc.request.url!r}.", status_code=exc.response.status_code)
 
-@app.post("/api/feedback")
+@app.post("/feedback")
 async def pipeline_feedback(payload: dict):
     """
     Broadcasts user feedback to all Morpheus pods via Kafka.

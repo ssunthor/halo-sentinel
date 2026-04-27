@@ -12,7 +12,7 @@ from collections import deque, Counter, defaultdict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response
 from websockets.exceptions import ConnectionClosed
 from fastapi.middleware.cors import CORSMiddleware
-from confluent_kafka import Consumer, KafkaError
+from confluent_kafka import Consumer, KafkaError, Producer
 import geoip2.database
 import httpx
 from datetime import datetime, timedelta
@@ -102,6 +102,13 @@ KAFKA_CONF_NETFLOW_V9 = {
 TOPIC_NETFLOW_V9 = os.getenv("KAFKA_NETFLOW_V9_TOPIC", "netflow_raw")
 
 PIPELINE_URL = os.getenv("PIPELINE_URL", "http://localhost:13005")
+CONTROL_TOPIC = os.getenv("KAFKA_CONTROL_TOPIC", "morpheus-control")
+
+# Kafka Producer for control messages
+control_producer = Producer({
+    'bootstrap.servers': os.getenv("KAFKA_NETFLOW_V9_SERVERS", "10.250.133.29:9092,10.250.133.30:9092,10.250.133.31:9092"),
+    'client.id': f'halo-backend-control-{uuid.uuid4().hex[:8]}'
+})
 
 GEOIP_DB_PATH = "GeoLite2-City.mmdb"
 MAP_TTL_SECONDS = 60
@@ -238,19 +245,32 @@ async def rss_proxy(url: str):
 @app.post("/api/feedback")
 async def pipeline_feedback(payload: dict):
     """
-    Proxies user feedback to the Morpheus pipeline.
+    Broadcasts user feedback to all Morpheus pods via Kafka.
     Expected payload: {"source": "host_id", "features": {...}}
     """
-    async with httpx.AsyncClient() as client:
-        try:
-            # Note: We append /feedback to the PIPELINE_URL
-            url = f"{PIPELINE_URL}/feedback"
-            print(f"📡 Forwarding feedback for {payload.get('source')} to {url}")
-            resp = await client.post(url, json=payload, timeout=10)
-            return resp.json()
-        except Exception as e:
-            print(f"❌ Feedback proxy error: {e}")
-            return {"status": "error", "message": str(e)}
+    try:
+        source = payload.get("source")
+        print(f"📡 Broadcasting feedback for {source} via Kafka ({CONTROL_TOPIC})")
+        
+        # Add a type field for future control extensibility
+        message = {
+            "type": "feedback",
+            "source": source,
+            "features": payload.get("features"),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        control_producer.produce(
+            CONTROL_TOPIC, 
+            json.dumps(message).encode('utf-8'),
+            key=str(source).encode('utf-8')
+        )
+        control_producer.flush(timeout=5)
+        
+        return {"status": "success", "message": "Feedback broadcast to all pipeline pods"}
+    except Exception as e:
+        print(f"❌ Feedback broadcast error: {e}")
+        return {"status": "error", "message": str(e)}
 
 @lru_cache(maxsize=16384)
 def get_site_for_ip(ip_str):

@@ -102,6 +102,7 @@ KAFKA_CONF_NETFLOW_V9 = {
 TOPIC_NETFLOW_V9 = os.getenv("KAFKA_NETFLOW_V9_TOPIC", "netflow_raw")
 
 PIPELINE_URL = os.getenv("PIPELINE_URL", "http://localhost:13005")
+TRAINING_URL = os.getenv("TRAINING_URL", PIPELINE_URL)
 CONTROL_TOPIC = os.getenv("KAFKA_CONTROL_TOPIC", "morpheus-control")
 
 # Kafka Producer for control messages
@@ -1813,7 +1814,7 @@ async def get_llm_analysis(device_name, model, os_info, cves):
                 "temperature": 0.1,
                 "max_tokens": 2048
             }
-            resp = await client.post("http://10.250.133.8:8080/vllm-gemma3-27b/v1/chat/completions", json=json_data, timeout=60)
+            resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=60)
             if resp.status_code == 200:
                 return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "Analysis unavailable.")
             return f"LLM Error: {resp.status_code}"
@@ -1974,7 +1975,7 @@ async def get_overall_summary(devices):
                 "temperature": 0.1,
                 "max_tokens": 4096
             }
-            resp = await client.post("http://10.250.133.8:8080/vllm-gemma3-27b/v1/chat/completions", json=json_data, timeout=120)
+            resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=120)
             if resp.status_code == 200:
                 overall_summary_cache = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "Summary unavailable.")
                 save_cache(OVERALL_SUMMARY_CACHE_FILE, overall_summary_cache)
@@ -2020,7 +2021,7 @@ async def get_overall_analysis(data):
                 "temperature": 0.1,
                 "max_tokens": 8192 
             }
-            resp = await client.post("http://10.250.133.8:8080/vllm-gemma3-27b/v1/chat/completions", json=json_data, timeout=300)
+            resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=300)
             
             if resp.status_code == 200:
                 result = resp.json()

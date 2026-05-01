@@ -1962,6 +1962,7 @@ function App() {
             </div>
           </div>
           <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
+	    {isMenuVisible('VITE_SHOW_OVERVIEW') && <NavButton id="overview" label="Global Overview" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_HOST_INVENTORY') && <NavButton id="host_inventory" label="Host Inventory" icon={Server} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_GALAXY') && <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_DESTINATIONS') && <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }

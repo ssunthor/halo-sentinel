@@ -6,7 +6,7 @@ const VENDORS = [
   'Cisco IOS', 'Juniper Junos', 'Palo Alto PAN-OS', 'Fortinet FortiOS', 'Check Point Gaia'
 ];
 
-const CrossVendor = ({ addChatMessage, triggerAiQuery, onConfigChange }) => {
+const CrossVendor = () => {
   const [sourceFile, setSourceFile] = useState(null);
   const [translatedConfig, setTranslatedConfig] = useState('');
   const [translationStatus, setTranslationStatus] = useState('idle'); // idle | translating | complete
@@ -45,7 +45,7 @@ const CrossVendor = ({ addChatMessage, triggerAiQuery, onConfigChange }) => {
         rawFile: file
       };
       setSourceFile(fileObj);
-      if (onConfigChange) onConfigChange(content);
+      
     };
     reader.readAsText(file);
     event.target.value = '';
@@ -79,18 +79,18 @@ const CrossVendor = ({ addChatMessage, triggerAiQuery, onConfigChange }) => {
       setTranslatedConfig(data.translated_config);
       setTranslationStatus('complete');
       
-      addChatMessage(`Successfully translated ${sourceFile.name} to ${selectedVendor} syntax.`, 'ai');
+      
       
       // Update parent state for AI context awareness
-      if (onConfigChange) onConfigChange(data.translated_config);
+      
       
       // Proactively trigger AI to explain the translation if requested
-      triggerAiQuery(`I have just translated a configuration to ${selectedVendor}. Please summarize the most significant syntax changes or mapping logic you applied.`, { silent: true });
+      
 
     } catch (error) {
       console.error("Translation Error:", error);
       setTranslationStatus('idle');
-      addChatMessage(`Error during translation: ${error.message}`, 'ai');
+      
     }
   };
 

@@ -28,6 +28,8 @@ import CyberCity from './components/CyberCity';
 import TrafficTorus from './components/TrafficTorus';
 import ChatWidget from './components/ChatWidget';
 import ConfigAnalyzer from './components/ConfigAnalyzer';
+import ConfigTranslator from './components/ConfigTranslator';
+import PolicyGenerator from './components/PolicyGenerator';
 import { DEFAULT_FEEDS } from './config/feeds';
 
 
@@ -169,17 +171,17 @@ const normalizeLog = (rawLog) => {
           is_sec = true;
         } 
         else if (label.includes("FIREWALL") || label.includes("BLOCK")){ 
-		category = "firewall_block";
-		is_sec = true;
-	}
+    category = "firewall_block";
+    is_sec = true;
+  }
         else if (label.includes("SUDO")){
           category = "sudo";
           is_sec = true;
         }
         else if (label.includes("NON_SECURITY") || label.includes("NORMAL")){
-		category = "system";
-		is_sec = false
-	}
+    category = "system";
+    is_sec = false
+  }
         else if (label.includes("SECURITY")){
           category = "security";
           is_sec = true;
@@ -1961,10 +1963,8 @@ function App() {
           <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
             {isMenuVisible('VITE_SHOW_OVERVIEW') && <NavButton id="overview" label="Global Overview" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_HOST_INVENTORY') && <NavButton id="host_inventory" label="Host Inventory" icon={Server} activeTab={activeTab} setTab={setActiveTab} /> }
-            {isMenuVisible('VITE_SHOW_VISUALIZATIONS') && (
-                <div><NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} />
-                <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /></div>
-            )}
+            {isMenuVisible('VITE_SHOW_GALAXY') && <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} /> }
+            {isMenuVisible('VITE_SHOW_DESTINATIONS') && <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_LOG_DNA') && <NavButton id="anomalies" label="System Log DNA" icon={AlertTriangle} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_NETFLOW_DNA') && <NavButton id="dfp" label="Network Netflow DNA" icon={Fingerprint} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_USER_ACTIVITY') && <NavButton id="user" label="User Activity" icon={Users} activeTab={activeTab} setTab={setActiveTab} /> }
@@ -1972,18 +1972,9 @@ function App() {
             {isMenuVisible('VITE_SHOW_NETWORK') && <NavButton id="network" label="Network & Firewall" icon={MapIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_NETBOX') && <NavButton id="netbox" label="Netbox CVEs" icon={Shield} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_RAW_DATA') && <NavButton id="raw" label="Raw Data" icon={Terminal} activeTab={activeTab} setTab={setActiveTab} /> }
-            {isMenuVisible('VITE_SHOW_CONFIG_ANALYZER') && (
-              <CollapsibleNavSection 
-                label="Config Analyzer" 
-                icon={FileSearch} 
-                activeTab={activeTab} 
-                childIds={['analyzer', 'translate', 'greenfield']}
-              >
-                <NavButton id="analyzer" label="Security Audit" icon={FileText} activeTab={activeTab} setTab={setActiveTab} />
-                <NavButton id="translate" label="Cross-Vendor" icon={ArrowRight} activeTab={activeTab} setTab={setActiveTab} />
-                <NavButton id="greenfield" label="Build Tool" icon={Hammer} activeTab={activeTab} setTab={setActiveTab} />
-              </CollapsibleNavSection>
-            )}
+            {isMenuVisible('VITE_SHOW_CONFIG_ANALYZER') && <NavButton id="analyzer" label="Config Analyzer" icon={FileText} activeTab={activeTab} setTab={setActiveTab} />}
+            {isMenuVisible('VITE_SHOW_CONFIG_TRANSLATOR') && <NavButton id="translate" label="Config Translator" icon={ArrowRight} activeTab={activeTab} setTab={setActiveTab} />}
+            {isMenuVisible('VITE_SHOW_CONFIG_BUILD_TOOL') && <NavButton id="greenfield" label="Build Tool" icon={Hammer} activeTab={activeTab} setTab={setActiveTab} />}
           </nav>
           <div className="p-4 border-t border-gray-900">
             <div className="text-xs text-gray-600 uppercase font-bold mb-2">System Status</div>
@@ -2987,9 +2978,9 @@ function App() {
             </div>
           )}
           {/* --- TAB: ANALYZER --- */}
-          {['analyzer', 'translate', 'greenfield'].includes(activeTab) && (
-            <ConfigAnalyzer activeTab={activeTab} setActiveTab={setActiveTab} />
-          )}
+          {activeTab === 'analyzer' && <ConfigAnalyzer />}
+          {activeTab === 'translate' && <ConfigTranslator />}
+          {activeTab === 'greenfield' && <PolicyGenerator />}
         </div>
         <HostDetailOverlay 
           host={selectedHost} 

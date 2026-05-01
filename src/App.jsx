@@ -1623,7 +1623,8 @@ function App() {
                    is_sec: true,
                    anomaly_score: p.y,
                    msg: `AutoEncoder Divergence: ${p.cause} (Vol: ${p.bytes}, Port: ${p.port})`,
-                   uuid: `${p.host}-${Date.now()}-${Math.random()}`
+                   uuid: `${p.host}-${Date.now()}-${Math.random()}`,
+                   features: p.features
                }));
 
                setNetflowLogBuffer(prev => {
@@ -1961,7 +1962,6 @@ function App() {
             </div>
           </div>
           <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
-            {isMenuVisible('VITE_SHOW_OVERVIEW') && <NavButton id="overview" label="Global Overview" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_HOST_INVENTORY') && <NavButton id="host_inventory" label="Host Inventory" icon={Server} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_GALAXY') && <NavButton id="galaxy" label="System Log Galaxy" icon={Orbit} activeTab={activeTab} setTab={setActiveTab} /> }
             {isMenuVisible('VITE_SHOW_DESTINATIONS') && <NavButton id="destinations" label="Destinations" icon={GlobeIcon} activeTab={activeTab} setTab={setActiveTab} /> }
@@ -3574,7 +3574,7 @@ const EventStream = ({ logs, defaultSearch = '', onHostClick }) => {
             </div>
 
             {/* DFP AI SCORES */}
-            <div className="grid grid-cols-2 gap-4 mb-4 p-2 bg-[#111] rounded border border-gray-800">
+            <div className="grid grid-cols-2 gap-4 mb-4 p-2 bg-[#111] rounded border border-gray-800 relative">
                  <div className="flex flex-col">
                     <span className="text-[10px] uppercase text-gray-500 font-bold">Anomaly Score</span>
                     <span className={`text-xl font-mono font-black ${selectedLog.anomaly_score > 0.8 ? 'text-red-500' : 'text-white'}`}>
@@ -3587,9 +3587,42 @@ const EventStream = ({ logs, defaultSearch = '', onHostClick }) => {
                         {selectedLog.mean_abs_err > -1 ? selectedLog.mean_abs_err.toFixed(4) : 'N/A'}
                     </span>
                  </div>
+
+                 {/* FEEDBACK BUTTON */}
+                 {selectedLog.anomaly_score > 0.1 && selectedLog.features && Object.keys(selectedLog.features).length > 0 && (
+                     <div className="col-span-2 mt-2 pt-2 border-t border-gray-800">
+                         <button 
+                            onClick={async () => {
+                                if (!window.confirm("Mark this behavioral pattern as NORMAL for this host? This will fine-tune the AI model immediately.")) return;
+                                try {
+                                    const resp = await fetch('/api/feedback', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            source: selectedLog.host,
+                                            features: selectedLog.features
+                                        })
+                                    });
+                                    const result = await resp.json();
+                                    if (result.status === 'success') {
+                                        alert(`Success! Model updated. Host ${selectedLog.host} now has ${result.overrides} behavioral overrides.`);
+                                    } else {
+                                        alert("Failed to submit feedback: " + result.message);
+                                    }
+                                } catch (e) {
+                                    alert("Error submitting feedback: " + e.message);
+                                }
+                            }}
+                            className="w-full py-2 bg-blue-900/40 hover:bg-blue-600 border border-blue-500 text-blue-400 hover:text-white rounded text-xs font-bold transition-all flex items-center justify-center gap-2 uppercase tracking-widest"
+                         >
+                            <Fingerprint size={14}/>
+                            Mark as Normal (Fine-tune AI)
+                         </button>
+                     </div>
+                 )}
             </div>
 
-            <div className="grid grid-cols-3 gap-4 mb-4">{Object.entries(selectedLog).filter(([k]) => k !== 'msg' && k !== 'uuid' && k !== 'id' && k !== 'anomaly_score' && k !== 'mean_abs_err').map(([key, val]) => ( <div key={key} className="flex flex-col"><span className="text-[10px] uppercase text-gray-500 font-bold">{key}</span><span className="text-xs text-white font-mono">{val.toString()}</span></div> ))}</div>
+            <div className="grid grid-cols-3 gap-4 mb-4">{Object.entries(selectedLog).filter(([k]) => k !== 'msg' && k !== 'uuid' && k !== 'id' && k !== 'anomaly_score' && k !== 'mean_abs_err' && k !== 'features').map(([key, val]) => ( <div key={key} className="flex flex-col"><span className="text-[10px] uppercase text-gray-500 font-bold">{key}</span><span className="text-xs text-white font-mono">{val?.toString()}</span></div> ))}</div>
             <div className="mt-4"><span className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Raw Message Payload</span><div className="bg-[#111] p-3 rounded border border-gray-800 font-mono text-xs text-gray-300 whitespace-pre-wrap break-words">{selectedLog.msg}</div></div>
          </div>
        )}

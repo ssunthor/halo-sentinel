@@ -61,6 +61,7 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8000")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "YOUR_NETBOX_API_TOKEN")
+NETBOX_TENANT_ID = os.getenv("NETBOX_TENANT_ID")
 
 VLLM_ENDPOINT = os.getenv("VLLM_ENDPOINT", "http://10.250.133.8:8080/vllm-gemma3-27b/v1/chat/completions")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "google/gemma-3-27b-it")
@@ -1926,6 +1927,8 @@ async def update_vulnerabilities():
                 devices = []
                 # Use slug for filtering if possible, or just the name as fallback
                 url = f"{NETBOX_URL}/api/dcim/devices/?role={role.lower()}"
+                if NETBOX_TENANT_ID:
+                    url += f"&tenant_id={NETBOX_TENANT_ID}"
                 print(f"  📡 Fetching devices for role '{role}' from {url}")
                 while url:
                     resp = await client.get(url, headers=headers)

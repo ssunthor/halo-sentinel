@@ -1828,34 +1828,38 @@ async def get_llm_analysis(device_name, model, os_info, cves):
 async def process_device(device, client, cve_cache, llm_analysis_cache, broker):
     device_name = device.get("name") or f"Device-{device.get('id')}"
     print(f"      🔎 Scanning {device_name}...")
+
+    # Extract potential identifiers
     platform = device.get("platform")
-    model = device.get("device_type", {}).get("model") or "Unknown Model"
-    
-    if not platform: 
-        print(f"      ⏭️ Skipping {device_name}: No platform info")
-        return {
-            "device_name": device_name, 
-            "is_vulnerable": False, 
-            "device_type": model, 
-            "highest_severity_score": 0,
-            "cves": [],
-            "llm_analysis": "No platform info available.",
-            "reason": "No platform"
-        }
-    
-    os_name = platform.get("name")
+    device_type = device.get("device_type", {})
+    manufacturer = device_type.get("manufacturer", {})
+    model = device_type.get("model") or "Unknown Model"
+
+    # Custom Field: os_build
     os_version = device.get("custom_fields", {}).get("os_build")
-    
+
+    # Determine OS/Product Name
+    os_name = None
+    if platform and platform.get("name"):
+        os_name = platform.get("name")
+    elif manufacturer and manufacturer.get("name"):
+        os_name = manufacturer.get("name")
+        print(f"        ℹ️ Using manufacturer '{os_name}' as fallback for missing platform")
+    else:
+        os_name = model
+        print(f"        ℹ️ Using model '{os_name}' as fallback for missing platform/manufacturer")
+
+    # Final check: Do we have enough to search?
     if not os_name:
-        print(f"      ⏭️ Skipping {device_name}: OS Name missing")
+        print(f"      ⏭️ Skipping {device_name}: Could not determine OS name or Manufacturer")
         return {
-            "device_name": device_name, 
-            "is_vulnerable": False, 
-            "device_type": model, 
+            "device_name": device_name,
+            "is_vulnerable": False,
+            "device_type": model,
             "highest_severity_score": 0,
             "cves": [],
-            "llm_analysis": "OS name missing from Netbox.",
-            "reason": "OS name missing"
+            "llm_analysis": "Could not determine OS/Product name from Netbox.",
+            "reason": "Missing OS name"
         }
 
     if not os_version:
@@ -1864,10 +1868,18 @@ async def process_device(device, client, cve_cache, llm_analysis_cache, broker):
         print(f"      ⚠️ {device_name}: OS Version (os_build) missing, using model for search: {search_query}")
     else:
         search_query = f"{os_name} {os_version}"
-        # Refine search query
-        match = re.search(r"^(\w+)\s+([\w-]+)\s+(\d+\.\d+)", os_name)
-        if match: search_query = f"{match.group(1)} {match.group(3)}"
-    
+        print(f"      ✅ {device_name}: Using search query: {search_query}")
+
+        # Refine search query for common patterns (e.g., "Fortinet v7.4.8" -> "Fortinet 7.4.8")
+        # Removing leading 'v' if present in the version string
+        version_clean = re.sub(r'^v', '', str(os_version))
+        # If os_name is "FortiOS" or "Fortinet" and version has commas/builds, simplify it
+        if "forti" in os_name.lower():
+            # Extract just the X.Y.Z part
+            match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
+            if match:
+                search_query = f"{os_name} {match.group(1)}"
+                print(f"        🎯 Refined Fortinet query: {search_query}")
     try:
         cves_data = await broker.request_vulnerabilities(search_query)
         cves = cves_data.get("vulnerabilities", [])

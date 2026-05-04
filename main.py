@@ -200,7 +200,10 @@ def json_dumps_bytes(x):
 async def get_netbox_roles():
     """
     Returns the list of configured Netbox roles.
+    If vulnerable_devices_cache is populated, returns its keys (sorted).
     """
+    if vulnerable_devices_cache:
+        return sorted(list(vulnerable_devices_cache.keys()))
     return NETBOX_ROLES
 
 @app.get("/cve-proxy")
@@ -1914,48 +1917,72 @@ async def process_device(device, client, cve_cache, llm_analysis_cache, broker):
 
 async def update_vulnerabilities():
     global vulnerable_devices_cache
-    print(f"🔍 NETBOX: Starting vulnerability scan for roles: {NETBOX_ROLES}")
+    
     headers = {"Authorization": f"Token {NETBOX_TOKEN}", "Content-Type": "application/json", "Accept": "application/json"}
     cve_cache = load_cache(CVE_CACHE_FILE)
     llm_analysis_cache = load_cache(LLM_ANALYSIS_CACHE_FILE)
     broker = VulnerabilityRequestBroker(cve_cache)
     new_cache = {}
+    
     async with httpx.AsyncClient(verify=False) as client:
         broker_task = asyncio.create_task(broker.worker(client))
-        for role in NETBOX_ROLES:
-            try:
-                devices = []
-                # Use slug for filtering if possible, or just the name as fallback
-                url = f"{NETBOX_URL}/api/dcim/devices/?role={role.lower()}"
-                if NETBOX_TENANT_ID:
-                    url += f"&tenant_id={NETBOX_TENANT_ID}"
-                print(f"  📡 Fetching devices for role '{role}' from {url}")
-                while url:
-                    resp = await client.get(url, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        results = data.get("results", [])
-                        devices.extend(results)
-                        print(f"    ✅ Found {len(results)} devices for role '{role}'")
-                        url = data.get("next") if data.get("next") else None
-                    else: 
-                        print(f"    ❌ Error fetching devices for role '{role}': {resp.status_code} {resp.text}")
-                        break
-                
-                if devices:
-                    tasks = [process_device(d, client, cve_cache, llm_analysis_cache, broker) for d in devices]
-                    results = await asyncio.gather(*tasks)
-                    new_cache[role] = sorted(results, key=lambda x: x.get("highest_severity_score", 0), reverse=True)
-                    print(f"    ✅ Processed {len(results)} devices for role '{role}'")
+        
+        if NETBOX_TENANT_ID:
+            print(f"🔍 NETBOX: Starting vulnerability scan for Tenant ID: {NETBOX_TENANT_ID}")
+            url = f"{NETBOX_URL}/api/dcim/devices/?tenant_id={NETBOX_TENANT_ID}&limit=100"
+            all_devices = []
+            while url:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    all_devices.extend(data.get("results", []))
+                    url = data.get("next")
                 else:
-                    new_cache[role] = []
-                    print(f"    ⚠️ No devices found for role '{role}'")
+                    print(f"    ❌ Error fetching devices for tenant {NETBOX_TENANT_ID}: {resp.status_code}")
+                    break
+            
+            # Group devices by role
+            devices_by_role = defaultdict(list)
+            for d in all_devices:
+                role_info = d.get("device_role")
+                role_name = role_info.get("name") if role_info else "Unknown"
+                devices_by_role[role_name].append(d)
+            
+            for role_name, devices in devices_by_role.items():
+                print(f"  📡 Processing {len(devices)} devices for role '{role_name}'")
+                tasks = [process_device(d, client, cve_cache, llm_analysis_cache, broker) for d in devices]
+                results = await asyncio.gather(*tasks)
+                new_cache[role_name] = sorted(results, key=lambda x: x.get("highest_severity_score", 0), reverse=True)
+        else:
+            print(f"🔍 NETBOX: Starting vulnerability scan for roles: {NETBOX_ROLES}")
+            for role in NETBOX_ROLES:
+                try:
+                    devices = []
+                    url = f"{NETBOX_URL}/api/dcim/devices/?role={role.lower()}"
+                    print(f"  📡 Fetching devices for role '{role}' from {url}")
+                    while url:
+                        resp = await client.get(url, headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            results = data.get("results", [])
+                            devices.extend(results)
+                            url = data.get("next")
+                        else: 
+                            print(f"    ❌ Error fetching devices for role '{role}': {resp.status_code}")
+                            break
                     
-            except Exception as e: 
-                print(f"  ❌ Netbox Error {role}: {e}")
-                traceback.print_exc()
+                    if devices:
+                        tasks = [process_device(d, client, cve_cache, llm_analysis_cache, broker) for d in devices]
+                        results = await asyncio.gather(*tasks)
+                        new_cache[role] = sorted(results, key=lambda x: x.get("highest_severity_score", 0), reverse=True)
+                    else:
+                        new_cache[role] = []
+                except Exception as e: 
+                    print(f"  ❌ Netbox Error {role}: {e}")
+        
         await broker.queue.join()
         broker_task.cancel()
+    
     vulnerable_devices_cache = new_cache
     save_cache(CVE_CACHE_FILE, cve_cache)
     save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)

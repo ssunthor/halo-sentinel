@@ -1844,7 +1844,12 @@ async def process_device(device, client, cve_cache, llm_analysis_cache, broker):
         os_name = platform.get("name")
     elif manufacturer and manufacturer.get("name"):
         os_name = manufacturer.get("name")
-        print(f"        ℹ️ Using manufacturer '{os_name}' as fallback for missing platform")
+        # NVD Optimization: 'Fortinet' as a keyword often fails because descriptions use 'FortiOS'
+        if "fortinet" in os_name.lower():
+            os_name = "FortiOS"
+            print(f"        🎯 Mapped manufacturer 'Fortinet' to '{os_name}' for better NVD matching")
+        else:
+            print(f"        ℹ️ Using manufacturer '{os_name}' as fallback for missing platform")
     else:
         os_name = model
         print(f"        ℹ️ Using model '{os_name}' as fallback for missing platform/manufacturer")
@@ -1867,35 +1872,49 @@ async def process_device(device, client, cve_cache, llm_analysis_cache, broker):
         search_query = f"{os_name} {model}"
         print(f"      ⚠️ {device_name}: OS Version (os_build) missing, using model for search: {search_query}")
     else:
-        search_query = f"{os_name} {os_version}"
-        print(f"      ✅ {device_name}: Using search query: {search_query}")
-
-        # Refine search query for common patterns (e.g., "Fortinet v7.4.8" -> "Fortinet 7.4.8")
-        # Removing leading 'v' if present in the version string
+        # Refine version: removing leading 'v'
         version_clean = re.sub(r'^v', '', str(os_version))
-        # If os_name is "FortiOS" or "Fortinet" and version has commas/builds, simplify it
+        
+        # Specific refinement for Fortinet/FortiOS
         if "forti" in os_name.lower():
-            # Extract just the X.Y.Z part
+            # Extract just the X.Y.Z part for cleaner matching
             match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
             if match:
-                search_query = f"{os_name} {match.group(1)}"
-                print(f"        🎯 Refined Fortinet query: {search_query}")
+                version_clean = match.group(1)
+        
+        search_query = f"{os_name} {version_clean}"
+        print(f"      ✅ {device_name}: Using search query: {search_query}")
+
     try:
         cves_data = await broker.request_vulnerabilities(search_query)
-        cves = cves_data.get("vulnerabilities", [])
+        raw_vulnerabilities = cves_data.get("vulnerabilities", [])
+        print(f"      📊 {device_name}: Found {len(raw_vulnerabilities)} raw CVEs for query '{search_query}'")
+        
         device_cves = []
         highest = 0
-        for item in cves:
+        for item in raw_vulnerabilities:
             cve = item.get("cve", {})
-            metrics = cve.get("metrics", {}).get("cvssMetricV31", [])
-            if metrics:
-                score = metrics[0].get("cvssData", {}).get("baseScore", 0)
+            
+            # Try to get metrics from V3.1, V3.0, then V2
+            metrics_data = cve.get("metrics", {})
+            metric = None
+            
+            if metrics_data.get("cvssMetricV31"):
+                metric = metrics_data.get("cvssMetricV31")[0]
+            elif metrics_data.get("cvssMetricV30"):
+                metric = metrics_data.get("cvssMetricV30")[0]
+            elif metrics_data.get("cvssMetricV2"):
+                metric = metrics_data.get("cvssMetricV2")[0]
+            
+            if metric:
+                cvss_data = metric.get("cvssData", {})
+                score = cvss_data.get("baseScore", 0)
                 if score > highest: highest = score
                 device_cves.append({
                     "id": cve.get("id"), 
                     "description": cve.get("descriptions", [{}])[0].get("value"), 
                     "score": score, 
-                    "severity": metrics[0].get("cvssData", {}).get("baseSeverity", "UNKNOWN")
+                    "severity": cvss_data.get("baseSeverity") or metric.get("baseSeverity") or "UNKNOWN"
                 })
         
         llm_analysis = "No vulnerabilities detected. No analysis required."

@@ -1783,15 +1783,29 @@ class VulnerabilityRequestBroker:
     async def worker(self, client):
         while True:
             search_query, event = await self.queue.get()
-            if search_query in self.cve_cache: cves_data = self.cve_cache[search_query]
+            if search_query in self.cve_cache:
+                cves_data = self.cve_cache[search_query]
             else:
                 encoded = urllib.parse.quote(search_query)
+                url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch={encoded}"
                 try:
-                    resp = await client.get(f"https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch={encoded}")
-                    cves_data = resp.json() if resp.status_code == 200 else {"vulnerabilities": []}
-                    self.cve_cache[search_query] = cves_data
-                except: cves_data = {"vulnerabilities": []}
-                await asyncio.sleep(8)
+                    print(f"      🌐 NVD API: Requesting '{search_query}'...")
+                    resp = await client.get(url, timeout=30)
+                    if resp.status_code == 200:
+                        cves_data = resp.json()
+                        # ONLY cache if we actually got a 200 OK
+                        self.cve_cache[search_query] = cves_data
+                        print(f"      ✅ NVD API: Found {len(cves_data.get('vulnerabilities', []))} CVEs for '{search_query}'")
+                    else:
+                        print(f"      ❌ NVD API Error {resp.status_code} for '{search_query}'")
+                        cves_data = {"vulnerabilities": []}
+                except Exception as e:
+                    print(f"      ❌ NVD API Exception for '{search_query}': {e}")
+                    cves_data = {"vulnerabilities": []}
+                
+                # NVD Rate limiting: 10 seconds between requests
+                await asyncio.sleep(10)
+            
             self.processed_requests[search_query] = cves_data
             event.set()
             self.queue.task_done()
@@ -1898,21 +1912,35 @@ async def process_device(device, client, cve_cache, llm_analysis_cache, broker):
             # Try to get metrics from V3.1, V3.0, then V2
             metrics_data = cve.get("metrics", {})
             metric = None
+            cvss_data = {}
             
             if metrics_data.get("cvssMetricV31"):
                 metric = metrics_data.get("cvssMetricV31")[0]
+                cvss_data = metric.get("cvssData", {})
             elif metrics_data.get("cvssMetricV30"):
                 metric = metrics_data.get("cvssMetricV30")[0]
+                cvss_data = metric.get("cvssData", {})
             elif metrics_data.get("cvssMetricV2"):
                 metric = metrics_data.get("cvssMetricV2")[0]
-            
-            if metric:
                 cvss_data = metric.get("cvssData", {})
+            
+            if cvss_data:
                 score = cvss_data.get("baseScore", 0)
                 if score > highest: highest = score
+                
+                # Find English description
+                descriptions = cve.get("descriptions", [])
+                description = "No description available."
+                for d in descriptions:
+                    if d.get("lang") == "en":
+                        description = d.get("value")
+                        break
+                if description == "No description available." and descriptions:
+                    description = descriptions[0].get("value")
+
                 device_cves.append({
                     "id": cve.get("id"), 
-                    "description": cve.get("descriptions", [{}])[0].get("value"), 
+                    "description": description, 
                     "score": score, 
                     "severity": cvss_data.get("baseSeverity") or metric.get("baseSeverity") or "UNKNOWN"
                 })
@@ -1995,11 +2023,50 @@ async def update_vulnerabilities():
                     devices_by_role[role_name].append(d)
                 
                 print(f"📁 Found {len(devices_by_role)} distinct roles for this tenant.")
+
+                # --- DEDUPLICATION STEP ---
+                unique_queries = set()
+                device_query_map = {} # device_id -> query
+
+                print("  🎯 Collecting unique search queries across all devices...")
+                for role_name, devices in devices_by_role.items():
+                    for d in devices:
+                        # We need to run the same logic used in process_device to get the query
+                        # Extract identifiers
+                        platform = d.get("platform")
+                        device_type = d.get("device_type", {})
+                        manufacturer = device_type.get("manufacturer", {})
+                        model = device_type.get("model") or "Unknown Model"
+                        os_version = d.get("custom_fields", {}).get("os_build")
+
+                        os_name = platform.get("name") if platform else (manufacturer.get("name") if manufacturer else model)
+                        if os_name and "fortinet" in os_name.lower(): os_name = "FortiOS"
+
+                        if not os_name: continue
+
+                        version_clean = re.sub(r'^v', '', str(os_version)) if os_version else model
+                        if os_name and "forti" in os_name.lower() and os_version:
+                            match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
+                            if match: version_clean = match.group(1)
+
+                        query = f"{os_name} {version_clean}"
+                        unique_queries.add(query)
+
+                print(f"  ✨ Found {len(unique_queries)} unique queries for {len(all_devices)} devices.")
+
+                # Pre-fetch all unique queries
+                query_tasks = [broker.request_vulnerabilities(q) for q in unique_queries]
+                if query_tasks:
+                    print(f"  🌐 Pre-fetching {len(query_tasks)} unique vulnerability datasets from NVD...")
+                    await asyncio.gather(*query_tasks)
+
+                # Now process devices normally (broker will hit internal cache immediately)
                 for role_name, devices in devices_by_role.items():
                     print(f"  📡 Processing {len(devices)} devices for role '{role_name}'...")
                     tasks = [process_device(d, client, cve_cache, llm_analysis_cache, broker) for d in devices]
                     results = await asyncio.gather(*tasks)
                     new_cache[role_name] = sorted(results, key=lambda x: x.get("highest_severity_score", 0), reverse=True)
+
             except Exception as te:
                 print(f"  ❌ Critical Error in Tenant Scan: {te}")
                 traceback.print_exc()

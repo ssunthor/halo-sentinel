@@ -1962,18 +1962,20 @@ async def update_vulnerabilities():
         if NETBOX_TENANT_ID:
             try:
                 print(f"🔍 NETBOX: Starting vulnerability scan for Tenant ID: {NETBOX_TENANT_ID}")
-                url = f"{NETBOX_URL}/api/dcim/devices/?tenant_id={NETBOX_TENANT_ID}&limit=100"
+                # limit=0 is the NetBox way to request all results in one go (or up to MAX_PAGE_SIZE)
+                url = f"{NETBOX_URL}/api/dcim/devices/?tenant_id={NETBOX_TENANT_ID}&limit=0"
                 all_devices = []
                 page = 1
                 while url:
                     print(f"  📡 Fetching page {page} of devices for tenant {NETBOX_TENANT_ID} from {url}...")
                     try:
-                        resp = await client.get(url, headers=headers, timeout=30)
+                        resp = await client.get(url, headers=headers, timeout=60)
                         if resp.status_code == 200:
                             data = resp.json()
+                            total_count = data.get("count", "unknown")
                             results = data.get("results", [])
                             all_devices.extend(results)
-                            print(f"    ✅ Page {page}: Received {len(results)} devices (Total so far: {len(all_devices)})")
+                            print(f"    ✅ Page {page}: Received {len(results)} devices (Total so far: {len(all_devices)} / {total_count})")
                             url = data.get("next")
                             page += 1
                         else:

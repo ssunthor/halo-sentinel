@@ -1841,63 +1841,36 @@ async def get_llm_analysis(device_name, model, os_info, cves):
 
 async def process_device(device, client, cve_cache, llm_analysis_cache, broker):
     device_name = device.get("name") or f"Device-{device.get('id')}"
-    print(f"      🔎 Scanning {device_name}...")
-
-    # Extract potential identifiers
-    platform = device.get("platform")
-    device_type = device.get("device_type", {})
-    manufacturer = device_type.get("manufacturer", {})
-    model = device_type.get("model") or "Unknown Model"
-
-    # Custom Field: os_build
+    model = device.get("device_type", {}).get("model") or "Unknown Model"
+    
+    # STRICT REQUIREMENT: Platform Name AND os_build
+    platform_info = device.get("platform")
+    os_name = platform_info.get("name") if platform_info else None
     os_version = device.get("custom_fields", {}).get("os_build")
 
-    # Determine OS/Product Name
-    os_name = None
-    if platform and platform.get("name"):
-        os_name = platform.get("name")
-    elif manufacturer and manufacturer.get("name"):
-        os_name = manufacturer.get("name")
-        # NVD Optimization: 'Fortinet' as a keyword often fails because descriptions use 'FortiOS'
-        if "fortinet" in os_name.lower():
-            os_name = "FortiOS"
-            print(f"        🎯 Mapped manufacturer 'Fortinet' to '{os_name}' for better NVD matching")
-        else:
-            print(f"        ℹ️ Using manufacturer '{os_name}' as fallback for missing platform")
-    else:
-        os_name = model
-        print(f"        ℹ️ Using model '{os_name}' as fallback for missing platform/manufacturer")
-
-    # Final check: Do we have enough to search?
-    if not os_name:
-        print(f"      ⏭️ Skipping {device_name}: Could not determine OS name or Manufacturer")
-        return {
-            "device_name": device_name,
-            "is_vulnerable": False,
-            "device_type": model,
-            "highest_severity_score": 0,
-            "cves": [],
-            "llm_analysis": "Could not determine OS/Product name from Netbox.",
-            "reason": "Missing OS name"
+    if not os_name or not os_version:
+        print(f"      ⏭️ Skipping {device_name}: Missing Platform ({os_name}) or os_build ({os_version})")
+        return { 
+            "device_name": device_name, 
+            "os": f"{os_name or 'Unknown'} {os_version or 'Unknown'}", 
+            "device_type": model, 
+            "highest_severity_score": 0.0, 
+            "cves": [], 
+            "is_vulnerable": False, 
+            "llm_analysis": "Status Unknown: Missing required NetBox fields (Platform or os_build) for vulnerability correlation." 
         }
 
-    if not os_version:
-        # Fallback to model if os_version is missing
-        search_query = f"{os_name} {model}"
-        print(f"      ⚠️ {device_name}: OS Version (os_build) missing, using model for search: {search_query}")
-    else:
-        # Refine version: removing leading 'v'
-        version_clean = re.sub(r'^v', '', str(os_version))
-        
-        # Specific refinement for Fortinet/FortiOS
-        if "forti" in os_name.lower():
-            # Extract just the X.Y.Z part for cleaner matching
-            match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
-            if match:
-                version_clean = match.group(1)
-        
-        search_query = f"{os_name} {version_clean}"
-        print(f"      ✅ {device_name}: Using search query: {search_query}")
+    print(f"      🔎 Scanning {device_name}...")
+    
+    # Simple cleaning: remove leading 'v' and extract core version for Fortinet
+    version_clean = re.sub(r'^v', '', str(os_version))
+    if "forti" in os_name.lower():
+        match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
+        if match: version_clean = match.group(1)
+    
+    search_query = f"{os_name} {version_clean}"
+    print(f"      ✅ {device_name}: Using search query: {search_query}")
+
 
     try:
         cves_data = await broker.request_vulnerabilities(search_query)
@@ -2026,26 +1999,21 @@ async def update_vulnerabilities():
 
                 # --- DEDUPLICATION STEP ---
                 unique_queries = set()
-                device_query_map = {} # device_id -> query
 
                 print("  🎯 Collecting unique search queries across all devices...")
                 for role_name, devices in devices_by_role.items():
                     for d in devices:
-                        # We need to run the same logic used in process_device to get the query
-                        # Extract identifiers
-                        platform = d.get("platform")
-                        device_type = d.get("device_type", {})
-                        manufacturer = device_type.get("manufacturer", {})
-                        model = device_type.get("model") or "Unknown Model"
+                        # STRICT REQUIREMENT: Platform Name AND os_build
+                        platform_info = d.get("platform")
+                        os_name = platform_info.get("name") if platform_info else None
                         os_version = d.get("custom_fields", {}).get("os_build")
 
-                        os_name = platform.get("name") if platform else (manufacturer.get("name") if manufacturer else model)
-                        if os_name and "fortinet" in os_name.lower(): os_name = "FortiOS"
+                        if not os_name or not os_version:
+                            continue
 
-                        if not os_name: continue
-
-                        version_clean = re.sub(r'^v', '', str(os_version)) if os_version else model
-                        if os_name and "forti" in os_name.lower() and os_version:
+                        # Simple cleaning: remove leading 'v' and extract core version for Fortinet
+                        version_clean = re.sub(r'^v', '', str(os_version))
+                        if "forti" in os_name.lower():
                             match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
                             if match: version_clean = match.group(1)
 
@@ -2053,7 +2021,6 @@ async def update_vulnerabilities():
                         unique_queries.add(query)
 
                 print(f"  ✨ Found {len(unique_queries)} unique queries for {len(all_devices)} devices.")
-
                 # Pre-fetch all unique queries
                 query_tasks = [broker.request_vulnerabilities(q) for q in unique_queries]
                 if query_tasks:

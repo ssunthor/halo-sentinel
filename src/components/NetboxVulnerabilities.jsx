@@ -354,3 +354,5 @@ const NetboxVulnerabilities = () => {
         </div>
     );
 };
+
+export default NetboxVulnerabilities;

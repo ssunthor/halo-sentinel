@@ -26,6 +26,7 @@ const NetboxVulnerabilities = () => {
     const [roles, setRoles] = useState([]);
     const [selectedRole, setSelectedRole] = useState('');
     const [backendReady, setBackendReady] = useState(false);
+    const [showUnknown, setShowUnknown] = useState(true);
 
     // Pagination and Search State
     const [searchTerm, setSearchTerm] = useState('');
@@ -123,11 +124,13 @@ const NetboxVulnerabilities = () => {
     // Filtering Logic
     const filteredDevices = devices.filter(device => {
         const search = searchTerm.toLowerCase();
-        return (
+        const searchMatch = (
             device.device_name?.toLowerCase().includes(search) ||
             device.device_type?.toLowerCase().includes(search) ||
             device.os?.toLowerCase().includes(search)
         );
+        const unknownMatch = showUnknown || (device.os && device.cves.length > 0);
+        return searchMatch && unknownMatch;
     });
 
     // Pagination Logic
@@ -213,6 +216,16 @@ const NetboxVulnerabilities = () => {
                                 <option key={val} value={val}>{val}</option>
                             ))}
                         </select>
+                    </div>
+                    <div className="flex items-center">
+                        <input
+                            type="checkbox"
+                            id="show-unknown"
+                            checked={showUnknown}
+                            onChange={() => setShowUnknown(!showUnknown)}
+                            className="mr-2"
+                        />
+                        <label htmlFor="show-unknown">Show Unknown</label>
                     </div>
                 </div>
             </div>
@@ -341,5 +354,3 @@ const NetboxVulnerabilities = () => {
         </div>
     );
 };
-
-export default NetboxVulnerabilities;

@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Server, X } from 'lucide-react';
+import { Server, X, Router, Network, Shield, HardDrive } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 const getSeverityColor = (score) => {
-    if (!score || score === 0) return 'green';
-    if (score >= 7) return 'red';
-    if (score >= 4) return 'orange';
-    return 'yellow';
+    if (!score || score === 0) return 'border-green-500';
+    if (score >= 7) return 'border-red-500';
+    if (score >= 4) return 'border-orange-500';
+    return 'border-yellow-500';
 };
 
 const getSeverityTextClass = (score) => {
@@ -15,6 +15,15 @@ const getSeverityTextClass = (score) => {
     if (score >= 7) return 'text-red-500';
     if (score >= 4) return 'text-orange-500';
     return 'text-yellow-500';
+};
+
+const getDeviceIcon = (deviceType) => {
+    const type = deviceType.toLowerCase();
+    if (type.includes('router')) return <Router className="text-gray-400" />;
+    if (type.includes('switch')) return <Network className="text-gray-400" />;
+    if (type.includes('firewall')) return <Shield className="text-gray-400" />;
+    if (type.includes('server')) return <Server className="text-gray-400" />;
+    return <HardDrive className="text-gray-400" />;
 };
 
 const NetboxVulnerabilities = () => {
@@ -148,13 +157,6 @@ const NetboxVulnerabilities = () => {
         return <div className="text-red-500">Error fetching data: {error}</div>;
     }
 
-    const severityColors = {
-        red: 'border-red-500 bg-red-900/20',
-        orange: 'border-orange-500 bg-orange-900/20',
-        yellow: 'border-yellow-500 bg-yellow-900/20',
-        green: 'border-green-500 bg-green-900/20',
-    };
-
     return (
         <div className="p-4 bg-black text-white min-h-screen">
             {/* Header and Filters */}
@@ -237,27 +239,29 @@ const NetboxVulnerabilities = () => {
                 </div>
             ) : (
                 <>
-                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 mb-6">
+                    <div className="space-y-2">
                         {currentItems.map((device) => (
                             <div 
                                 key={device.device_name} 
-                                className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-300 hover:scale-[1.02] flex flex-col ${severityColors[getSeverityColor(device.highest_severity_score)]}`}
+                                className={`flex items-center p-3 bg-gray-900/50 rounded-lg border-l-4 transition-all duration-300 hover:bg-gray-800/70 cursor-pointer ${getSeverityColor(device.highest_severity_score)}`}
                                 onClick={() => setSelectedDevice(device)}
                             >
-                                <div className="flex items-start justify-between mb-2">
-                                    <Server size={20} className="text-gray-400 shrink-0 mt-1" />
-                                    <div className="text-right">
-                                        <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
-                                            {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : "0.0"}
-                                        </span>
-                                    </div>
+                                <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center">
+                                    {getDeviceIcon(device.device_type)}
                                 </div>
-                                <h3 className="text-sm font-bold text-white truncate w-full mb-1" title={device.device_name.toUpperCase()}>
-                                    {device.device_name.toUpperCase()}
-                                </h3>
-                                <div className="mt-auto">
-                                    <p className="text-[10px] text-gray-500 uppercase font-bold truncate">{device.device_type}</p>
-                                    <p className="text-[10px] text-green-500/70 truncate">{device.os}</p>
+                                <div className="flex-grow mx-4">
+                                    <h3 className="text-sm font-bold text-white truncate" title={device.device_name.toUpperCase()}>
+                                        {device.device_name.toUpperCase()}
+                                    </h3>
+                                    <p className="text-xs text-gray-500 truncate">{device.device_type}</p>
+                                </div>
+                                <div className="flex-shrink-0 w-48 text-xs text-green-500/70 truncate text-right" title={device.os}>
+                                    {device.os}
+                                </div>
+                                <div className="flex-shrink-0 w-20 text-right">
+                                    <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
+                                        {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : "0.0"}
+                                    </span>
                                 </div>
                             </div>
                         ))}

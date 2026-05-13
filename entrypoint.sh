@@ -33,15 +33,19 @@ if [ -z "$BACKEND_URL" ]; then
 fi
 
 if [ -z "$CONFIG_ANALYZER_URL" ]; then
-    export CONFIG_ANALYZER_URL="config-analyzer:8010"
+    export CONFIG_ANALYZER_URL="config-analyzer:8000"
+fi
+
+if [ -z "$VITE_WS_URL" ]; then
+    export VITE_WS_URL="ws://backend:5174/ws"
 fi
 
 # Use envsubst to replace variables in the nginx configs
 # We use a temporary file to avoid overwriting the source if it's mounted
-envsubst '${BACKEND_URL} ${CONFIG_ANALYZER_URL}' < /etc/nginx/conf.d/default.conf > /etc/nginx/conf.d/default.conf.tmp
+envsubst '${BACKEND_URL} ${CONFIG_ANALYZER_URL} ${VITE_WS_URL}' < /etc/nginx/conf.d/default.conf > /etc/nginx/conf.d/default.conf.tmp
 mv /etc/nginx/conf.d/default.conf.tmp /etc/nginx/conf.d/default.conf
 
-echo "Nginx config updated with BACKEND_URL=${BACKEND_URL} and CONFIG_ANALYZER_URL=${CONFIG_ANALYZER_URL}"
+echo "Nginx config updated with BACKEND_URL=${BACKEND_URL} and CONFIG_ANALYZER_URL=${CONFIG_ANALYZER_URL} and VITE_WS_URL=${VITE_WS_URL}"
 
 # Start Nginx
 exec nginx -g "daemon off;"

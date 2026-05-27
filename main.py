@@ -28,6 +28,7 @@ from config import NETBOX_ROLES
 import math
 import uvloop
 import random
+from llm_interface import vLLMClient
 
 try:
     import orjson
@@ -65,6 +66,31 @@ NETBOX_TENANT_ID = os.getenv("NETBOX_TENANT_ID")
 
 VLLM_ENDPOINT = os.getenv("VLLM_ENDPOINT", "http://10.250.133.8:8080/vllm-gemma3-27b/v1/chat/completions")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "google/gemma-3-27b-it")
+VLLM_TOKEN = os.getenv("VLLM_TOKEN", "NONE")
+
+# Keycloak Auth Configuration
+LLM_AUTH_URL = os.getenv("LLM_AUTH_URL")
+LLM_CLIENT_ID = os.getenv("LLM_CLIENT_ID")
+LLM_CLIENT_SECRET = os.getenv("LLM_CLIENT_SECRET")
+
+# Initialize LLM Client
+vllm_config = {
+    "model": VLLM_MODEL,
+    "base_url": VLLM_ENDPOINT.split("/v1")[0] if "/v1" in VLLM_ENDPOINT else VLLM_ENDPOINT,
+    "api_endpoint": "/v1/chat/completions",
+    "chat_timeout_seconds": 300,
+    "num_ctx": 4096,
+    "ssl_verify": False,
+    "enable_thinking": False
+}
+
+vllm_auth_cfg = {
+    "auth_url": LLM_AUTH_URL,
+    "client_id": LLM_CLIENT_ID,
+    "client_secret": LLM_CLIENT_SECRET
+} if LLM_AUTH_URL and LLM_CLIENT_ID and LLM_CLIENT_SECRET else None
+
+vllm_client = vLLMClient(vllm_config, vllm_auth_cfg, api_key=VLLM_TOKEN)
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
@@ -1724,40 +1750,37 @@ class HostAnalysisBroker:
 
     async def worker(self):
         print("🤖 AI: Host Anomaly Analysis worker started...")
-        async with httpx.AsyncClient(verify=False) as client:
-            while True:
-                host_id, score, reason, log_msg = await self.queue.get()
-                try:
-                    # 1. Prepare Prompt
-                    prompt = f"""Analyze this network anomaly for host {host_id}.
-                    
+        while True:
+            host_id, score, reason, log_msg = await self.queue.get()
+            try:
+                # 1. Prepare Prompt
+                prompt = f"""Analyze this network anomaly for host {host_id}.
+                
 Score: {score:.2f}
 Detected Reason: {reason}
 Raw Event Data: {log_msg[:1000]}
 
 Provide a concise, one-sentence "AI Insight" explaining what this actually means for a human operator. Focus on the behavior, not the numbers."""
 
-                    # 2. Call LLM
-                    json_data = {
-                        "model": VLLM_MODEL,
-                        "messages": [{"role": "system", "content": "You are a senior security analyst providing concise insights."},
-                                     {"role": "user", "content": prompt}],
-                        "temperature": 0.1,
-                        "max_tokens": 256
-                    }
-                    resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=30)
-                    
-                    if resp.status_code == 200:
-                        insight = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                        # 3. Store in Redis with 24 hour TTL for "retention"
-                        self.state.r.set(f"{self.state.KEY_HOST_ANALYSIS_PREFIX}{host_id}", insight, ex=86400)
-                        print(f"🤖 AI: Analysis completed and retained for {host_id} (Score: {score:.2f})")
-                    
-                except Exception as e:
-                    print(f"AI Host Analysis Failed for {host_id}: {e}")
+                # 2. Call LLM
+                messages = [
+                    {"role": "system", "content": "You are a senior security analyst providing concise insights."},
+                    {"role": "user", "content": prompt}
+                ]
                 
-                self.queue.task_done()
-                await asyncio.sleep(0.5) # Slightly faster processing
+                response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=256)
+                
+                if response and "content" in response:
+                    insight = response["content"].strip()
+                    # 3. Store in Redis with 24 hour TTL for "retention"
+                    self.state.r.set(f"{self.state.KEY_HOST_ANALYSIS_PREFIX}{host_id}", insight, ex=86400)
+                    print(f"🤖 AI: Analysis completed and retained for {host_id} (Score: {score:.2f})")
+                
+            except Exception as e:
+                print(f"AI Host Analysis Failed for {host_id}: {e}")
+            
+            self.queue.task_done()
+            await asyncio.sleep(0.5) # Slightly faster processing
 
     async def request_analysis(self, host_id, score, reason, log_msg):
         # 1. Check Cooldown (Don't analyze the same host more than once every 10 mins)
@@ -1826,18 +1849,12 @@ async def get_llm_analysis(resource_name, model, os_info, cves):
         cve_list = "\n".join([f"- {c['id']}: {c['description']} (Score: {c['score']})" for c in cves])
         prompt = f"Analyze the security risk for resource '{resource_name}' (Model: {model}, OS: {os_info}).\n\nThe following vulnerabilities were found:\n{cve_list}\n\nProvide a concise assessment of the impact and recommended actions."
 
-        async with httpx.AsyncClient(verify=False) as client:
-            json_data = {
-                "model": VLLM_MODEL,
-                "messages": [{"role": "system", "content": "You are a senior security analyst providing concise insights."},
-                                     {"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 2048
-            }
-            resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=60)
-            if resp.status_code == 200:
-                return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "Analysis unavailable.")
-            return f"LLM Error: {resp.status_code}"
+        messages = [{"role": "user", "content": prompt}]
+        response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=2048)
+        
+        if response and "content" in response:
+            return response["content"].strip()
+        return "Analysis unavailable."
     except Exception as e:
         return f"Analysis failed: {str(e)}"
 
@@ -2326,20 +2343,15 @@ async def get_overall_summary(devices):
     print(f"📝 NETBOX: Generating overall summary for {len(vuln)} vulnerable devices...")
     summary_input = "\n".join([f"- {d['resource_name']}: {d.get('llm_analysis')}" for d in vuln])
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            json_data = {
-                "model": "google/gemma-3-27b-it",
-                "messages": [{"role": "user", "content": f"Summarize the following security vulnerabilities found across our network infrastructure:\n{summary_input}" }],
-                "temperature": 0.1,
-                "max_tokens": 4096
-            }
-            resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=120)
-            if resp.status_code == 200:
-                overall_summary_cache = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "Summary unavailable.")
-                save_cache(OVERALL_SUMMARY_CACHE_FILE, overall_summary_cache)
-                print("  ✅ Overall summary updated.")
-            else:
-                print(f"  ❌ Summary LLM Error: {resp.status_code}")
+        messages = [{"role": "user", "content": f"Summarize the following security vulnerabilities found across our network infrastructure:\n{summary_input}" }]
+        response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=4096)
+        
+        if response and "content" in response:
+            overall_summary_cache = response["content"].strip()
+            save_cache(OVERALL_SUMMARY_CACHE_FILE, overall_summary_cache)
+            print("  ✅ Overall summary updated.")
+        else:
+            print("  ❌ Summary LLM Error: No response")
     except Exception as e: 
         print(f"  ❌ Summary Generation Failed: {e}")
 
@@ -2380,27 +2392,19 @@ async def get_overall_analysis(data):
     print("DEBUG: Starting Overall Analysis LLM Call...")
     global overall_analysis_cache
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            json_data = {
-                "model": "google/gemma-3-27b-it", # Verify this matches the name loaded in vLLM
-                "messages": [{"role": "user", "content": f"Analyze the following security event data and provide a high-level summary of anomalies and threats:\n{json.dumps(data)}"}],
-                #"messages": [{"role": "user", "content": f"You are a platform called Defence Halo. Given the information provided and the observables you have, describe in detail who you are and what you do.\n{json.dumps(data)}"}],
-                "temperature": 0.1,
-                "max_tokens": 8192 
-            }
-            resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=300)
-            
-            if resp.status_code == 200:
-                result = resp.json()
-                content = result.get("choices", [{}])[0].get("message", {}).get("content")
-                if content:
-                    overall_analysis_cache = content
-                    save_cache(OVERALL_ANALYSIS_CACHE_FILE, overall_analysis_cache)
-                    print("DEBUG: Overall Analysis Updated Successfully.")
-                else:
-                    print(f"DEBUG: Unexpected LLM response format: {result}")
+        messages = [{"role": "user", "content": f"Analyze the following security event data and provide a high-level summary of anomalies and threats:\n{json.dumps(data)}"}]
+        response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=8192)
+        
+        if response and "content" in response:
+            content = response["content"].strip()
+            if content:
+                overall_analysis_cache = content
+                save_cache(OVERALL_ANALYSIS_CACHE_FILE, overall_analysis_cache)
+                print("DEBUG: Overall Analysis Updated Successfully.")
             else:
-                 print(f"DEBUG: LLM Error {resp.status_code}: {resp.text}")
+                print(f"DEBUG: Unexpected LLM response format: {response}")
+        else:
+            print("DEBUG: LLM Error: No response")
                  
     except Exception as e: 
         print(f"DEBUG: Overall Analysis Failed: {e}")
@@ -2500,23 +2504,17 @@ async def chat_endpoint(request: ChatRequest):
         if enhanced_context:
             system_prompt += f"\n\nCurrent Dashboard Context (Real-time data): {json.dumps(enhanced_context)}"
 
-        async with httpx.AsyncClient(verify=False) as client:
-            json_data = {
-                "model": VLLM_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": request.message}
-                ],
-                "temperature": 0.2,
-                "max_tokens": 1024
-            }
-            resp = await client.post(VLLM_ENDPOINT, json=json_data, timeout=60)
-            
-            if resp.status_code == 200:
-                result = resp.json()
-                return {"response": result.get("choices", [{}])[0].get("message", {}).get("content", "I'm sorry, I couldn't generate a response.")}
-            else:
-                return {"response": f"Error from AI backend: {resp.status_code}"}
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request.message}
+        ]
+        
+        response = vllm_client.get_chat_completion(messages, temperature=0.2, json_mode=False, max_tokens=1024)
+        
+        if response and "content" in response:
+            return {"response": response["content"].strip()}
+        else:
+            return {"response": "I'm sorry, I couldn't generate a response."}
     except Exception as e:
         return {"response": f"Chat failed: {str(e)}"}
 

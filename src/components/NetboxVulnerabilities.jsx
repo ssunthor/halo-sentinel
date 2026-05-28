@@ -34,8 +34,6 @@ const NetboxVulnerabilities = () => {
     const [error, setError] = useState(null);
     const [selectedDevice, setSelectedDevice] = useState(null);
     const [overallSummary, setOverallSummary] = useState("");
-    const [roles, setRoles] = useState([]);
-    const [selectedRole, setSelectedRole] = useState('');
     const [backendReady, setBackendReady] = useState(false);
     const [scanInProgress, setScanInProgress] = useState(false);
     const [showUnknown, setShowUnknown] = useState(true);
@@ -73,35 +71,14 @@ const NetboxVulnerabilities = () => {
     }, [apiBase]);
 
     useEffect(() => {
-        const fetchRoles = async () => {
-            if (!backendReady && !scanInProgress) return;
-            try {
-                const response = await fetch(`${apiBase}/netbox/roles`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                setRoles(data);
-                if (data.length > 0 && !selectedRole) {
-                    setSelectedRole(data[0]);
-                }
-            } catch (e) {
-                setError(e.message);
-            }
-        };
-
-        fetchRoles();
-    }, [backendReady, scanInProgress, apiBase, selectedRole]);
-
-    useEffect(() => {
-        const fetchNetboxData = async (role) => {
+        const fetchNetboxData = async () => {
             if (!backendReady && !scanInProgress) return;
             // Only set loading on first fetch
             if (devices.length === 0) setLoading(true);
             setError(null); // Clear previous errors
 
             try {
-                const deviceResponse = await fetch(`${apiBase}/netbox/vulnerabilities?role=${role}`);
+                const deviceResponse = await fetch(`${apiBase}/netbox/vulnerabilities`);
                 if (!deviceResponse.ok) {
                     throw new Error(`HTTP error! status: ${deviceResponse.status} for devices`);
                 }
@@ -129,20 +106,20 @@ const NetboxVulnerabilities = () => {
             }
         };
 
-        fetchNetboxData(selectedRole);
+        fetchNetboxData();
 
         // Polling if scan is in progress
         let pollInterval;
         if (scanInProgress) {
             pollInterval = setInterval(() => {
-                fetchNetboxData(selectedRole);
+                fetchNetboxData();
             }, 5000);
         }
 
         return () => {
             if (pollInterval) clearInterval(pollInterval);
         };
-    }, [selectedRole, backendReady, apiBase, showVirtualMachines, scanInProgress]); // Add scanInProgress to dependencies
+    }, [backendReady, apiBase, showVirtualMachines, scanInProgress]); // Add scanInProgress to dependencies
 
     useEffect(() => {
         const fetchOverallSummary = async () => {
@@ -250,22 +227,8 @@ const NetboxVulnerabilities = () => {
                             </button>
                         )}
                     </div>
+{/* Items Per Page */}
 
-                    {/* Role Select */}
-                    <div className="flex items-center">
-                        <label className="mr-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Role:</label>
-                        <select
-                            value={selectedRole}
-                            onChange={(e) => setSelectedRole(e.target.value)}
-                            className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-green-500/50"
-                        >
-                            {roles.map(role => (
-                                <option key={role} value={role}>{role}</option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {/* Items Per Page */}
                     <div className="flex items-center">
                         <label className="mr-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Show:</label>
                         <select
@@ -307,7 +270,7 @@ const NetboxVulnerabilities = () => {
             {loading ? (
                 <div className="flex items-center justify-center h-64">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500"></div>
-                    <span className="ml-3 text-gray-400">Scanning {selectedRole}...</span>
+                    <span className="ml-3 text-gray-400">Scanning Netbox data...</span>
                 </div>
             ) : (
                 <>

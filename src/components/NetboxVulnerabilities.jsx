@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Server, X } from 'lucide-react';
+import { Server, X, Router, Network, Shield, HardDrive } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 const getSeverityColor = (score) => {
-    if (!score || score === 0) return 'green';
-    if (score >= 7) return 'red';
-    if (score >= 4) return 'orange';
-    return 'yellow';
+    if (!score || score === 0) return 'border-green-500';
+    if (score >= 7) return 'border-red-500';
+    if (score >= 4) return 'border-orange-500';
+    return 'border-yellow-500';
 };
 
 const getSeverityTextClass = (score) => {
@@ -17,8 +17,19 @@ const getSeverityTextClass = (score) => {
     return 'text-yellow-500';
 };
 
+const getDeviceIcon = (deviceType) => {
+    const type = (deviceType || '').toLowerCase();
+    if (type.includes('virtual-machine') || type.includes('vm')) return <Server className="text-blue-400" />; // Using Server icon for VMs, with a different color
+    if (type.includes('router')) return <Router className="text-gray-400" />;
+    if (type.includes('switch')) return <Network className="text-gray-400" />;
+    if (type.includes('firewall')) return <Shield className="text-gray-400" />;
+    if (type.includes('server')) return <Server className="text-gray-400" />;
+    return <HardDrive className="text-gray-400" />;
+};
+
 const NetboxVulnerabilities = () => {
     const [devices, setDevices] = useState([]);
+    const [virtualMachines, setVirtualMachines] = useState([]); // New state for virtual machines
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [selectedDevice, setSelectedDevice] = useState(null);
@@ -26,6 +37,9 @@ const NetboxVulnerabilities = () => {
     const [roles, setRoles] = useState([]);
     const [selectedRole, setSelectedRole] = useState('');
     const [backendReady, setBackendReady] = useState(false);
+    const [scanInProgress, setScanInProgress] = useState(false);
+    const [showUnknown, setShowUnknown] = useState(true);
+    const [showVirtualMachines, setShowVirtualMachines] = useState(false);
 
     // Pagination and Search State
     const [searchTerm, setSearchTerm] = useState('');
@@ -45,23 +59,22 @@ const NetboxVulnerabilities = () => {
                 if (data.initial_scan_complete) {
                     setBackendReady(true);
                 }
+                setScanInProgress(data.scan_in_progress);
             } catch (e) {
                 console.error("Error checking backend status:", e);
             }
         };
 
         const interval = setInterval(() => {
-            if (!backendReady) {
-                checkBackendStatus();
-            }
+            checkBackendStatus();
         }, 2000);
 
         return () => clearInterval(interval);
-    }, [backendReady, apiBase]);
+    }, [apiBase]);
 
     useEffect(() => {
         const fetchRoles = async () => {
-            if (!backendReady) return;
+            if (!backendReady && !scanInProgress) return;
             try {
                 const response = await fetch(`${apiBase}/netbox/roles`);
                 if (!response.ok) {
@@ -78,20 +91,37 @@ const NetboxVulnerabilities = () => {
         };
 
         fetchRoles();
-    }, [backendReady, apiBase, selectedRole]);
+    }, [backendReady, scanInProgress, apiBase, selectedRole]);
 
     useEffect(() => {
-        const fetchVulnerabilities = async (role) => {
-            if (!role || !backendReady) return;
-            setLoading(true);
+        const fetchNetboxData = async (role) => {
+            if (!backendReady && !scanInProgress) return;
+            // Only set loading on first fetch
+            if (devices.length === 0) setLoading(true);
+            setError(null); // Clear previous errors
+
             try {
-                const response = await fetch(`${apiBase}/netbox/vulnerabilities?role=${role}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                const deviceResponse = await fetch(`${apiBase}/netbox/vulnerabilities?role=${role}`);
+                if (!deviceResponse.ok) {
+                    throw new Error(`HTTP error! status: ${deviceResponse.status} for devices`);
                 }
-                const data = await response.json();
-                setDevices(data);
-                setCurrentPage(1); // Reset to page 1 on role change
+                const deviceData = await deviceResponse.json();
+                
+                let vmData = [];
+                if (showVirtualMachines) {
+                    // Assuming a new endpoint for virtual machines
+                    const vmResponse = await fetch(`${apiBase}/netbox/virtual-machines?status=active&tenant_id=1`);
+                    if (!vmResponse.ok) {
+                        throw new Error(`HTTP error! status: ${vmResponse.status} for virtual machines`);
+                    }
+                    vmData = await vmResponse.json();
+                }
+
+                // Combine devices and virtual machines
+                const combinedData = [...deviceData, ...vmData];
+                setDevices(combinedData); // Update devices state with combined data
+                if (currentPage === 1 && devices.length === 0) setCurrentPage(1);
+
             } catch (e) {
                 setError(e.message);
             } finally {
@@ -99,12 +129,24 @@ const NetboxVulnerabilities = () => {
             }
         };
 
-        fetchVulnerabilities(selectedRole);
-    }, [selectedRole, backendReady, apiBase]);
+        fetchNetboxData(selectedRole);
+
+        // Polling if scan is in progress
+        let pollInterval;
+        if (scanInProgress) {
+            pollInterval = setInterval(() => {
+                fetchNetboxData(selectedRole);
+            }, 5000);
+        }
+
+        return () => {
+            if (pollInterval) clearInterval(pollInterval);
+        };
+    }, [selectedRole, backendReady, apiBase, showVirtualMachines, scanInProgress]); // Add scanInProgress to dependencies
 
     useEffect(() => {
         const fetchOverallSummary = async () => {
-            if (!backendReady) return;
+            if (!backendReady && !scanInProgress) return;
             try {
                 const response = await fetch(`${apiBase}/netbox/overall-summary`);
                 if (!response.ok) {
@@ -118,17 +160,26 @@ const NetboxVulnerabilities = () => {
         };
 
         fetchOverallSummary();
-    }, [backendReady, apiBase]);
+    }, [backendReady, scanInProgress, apiBase]);
 
     // Filtering Logic
     const filteredDevices = devices.filter(device => {
         const search = searchTerm.toLowerCase();
-        return (
-            device.device_name?.toLowerCase().includes(search) ||
-            device.device_type?.toLowerCase().includes(search) ||
-            device.os?.toLowerCase().includes(search)
+        const searchMatch = (
+            (device.resource_name || '').toLowerCase().includes(search) ||
+            (device.resource_type || '').toLowerCase().includes(search) ||
+            (device.os || '').toLowerCase().includes(search)
         );
+        const unknownMatch = showUnknown || (device.os && device.cves.length > 0);
+        return searchMatch && unknownMatch;
     });
+
+    // Progress Calculation - across ALL devices regardless of selected role
+    const totalDevicesCount = devices.length;
+    const scannedDevicesCount = devices.filter(d => d.llm_analysis !== 'Scanning...').length;
+    
+    // Fallback to global counts if no devices in current view but scan is running
+    const scanProgress = totalDevicesCount > 0 ? Math.round((scannedDevicesCount / totalDevicesCount) * 100) : 0;
 
     // Pagination Logic
     const effectiveItemsPerPage = itemsPerPage === 'All' ? filteredDevices.length : parseInt(itemsPerPage);
@@ -137,7 +188,7 @@ const NetboxVulnerabilities = () => {
     const indexOfFirstItem = indexOfLastItem - (effectiveItemsPerPage || filteredDevices.length);
     const currentItems = filteredDevices.slice(indexOfFirstItem, indexOfLastItem);
 
-    if (!backendReady) {
+    if (!backendReady && !scanInProgress) {
         return <div className="text-white">Waiting for backend to be ready...</div>;
     }
     
@@ -145,15 +196,31 @@ const NetboxVulnerabilities = () => {
         return <div className="text-red-500">Error fetching data: {error}</div>;
     }
 
-    const severityColors = {
-        red: 'border-red-500 bg-red-900/20',
-        orange: 'border-orange-500 bg-orange-900/20',
-        yellow: 'border-yellow-500 bg-yellow-900/20',
-        green: 'border-green-500 bg-green-900/20',
-    };
-
     return (
         <div className="p-4 bg-black text-white min-h-screen">
+            {/* Progress Meter */}
+            {scanInProgress && (
+                <div className="mb-6 bg-gray-900/50 p-4 rounded-xl border border-gray-800 shadow-lg animate-pulse-subtle">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-sm font-bold text-green-500 uppercase tracking-widest flex items-center">
+                            <div className="mr-2 w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
+                            Vulnerability Scan in Progress...
+                        </span>
+                        <span className="text-sm font-black text-white">{scanProgress}%</span>
+                    </div>
+                    <div className="w-full bg-gray-800 rounded-full h-3 border border-gray-700 overflow-hidden">
+                        <div 
+                            className="bg-gradient-to-r from-green-600 to-green-400 h-full transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(34,197,94,0.5)]"
+                            style={{ width: `${scanProgress}%` }}
+                        ></div>
+                    </div>
+                    <div className="flex justify-between mt-2">
+                        <p className="text-[10px] text-gray-500 uppercase font-bold">Processing {scannedDevicesCount} of {totalDevicesCount} resources</p>
+                        <p className="text-[10px] text-gray-400 font-mono italic">Real-time update active</p>
+                    </div>
+                </div>
+            )}
+
             {/* Header and Filters */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 bg-gray-900/50 p-4 rounded-xl border border-gray-800">
                 <div>
@@ -214,6 +281,26 @@ const NetboxVulnerabilities = () => {
                             ))}
                         </select>
                     </div>
+                    <div className="flex items-center">
+                        <input
+                            type="checkbox"
+                            id="show-unknown"
+                            checked={showUnknown}
+                            onChange={() => setShowUnknown(!showUnknown)}
+                            className="mr-2"
+                        />
+                        <label htmlFor="show-unknown">Show Unknown</label>
+                    </div>
+                    <div className="flex items-center">
+                        <input
+                            type="checkbox"
+                            id="show-vms"
+                            checked={showVirtualMachines}
+                            onChange={() => setShowVirtualMachines(!showVirtualMachines)}
+                            className="mr-2"
+                        />
+                        <label htmlFor="show-vms">Show Virtual Machines</label>
+                    </div>
                 </div>
             </div>
             
@@ -224,27 +311,29 @@ const NetboxVulnerabilities = () => {
                 </div>
             ) : (
                 <>
-                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 mb-6">
+                    <div className="space-y-2">
                         {currentItems.map((device) => (
                             <div 
-                                key={device.device_name} 
-                                className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-300 hover:scale-[1.02] flex flex-col ${severityColors[getSeverityColor(device.highest_severity_score)]}`}
+                                key={device.resource_name} 
+                                className={`flex items-center p-3 bg-gray-900/50 rounded-lg border-l-4 transition-all duration-300 hover:bg-gray-800/70 cursor-pointer ${getSeverityColor(device.highest_severity_score)}`}
                                 onClick={() => setSelectedDevice(device)}
                             >
-                                <div className="flex items-start justify-between mb-2">
-                                    <Server size={20} className="text-gray-400 shrink-0 mt-1" />
-                                    <div className="text-right">
-                                        <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
-                                            {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : "0.0"}
-                                        </span>
-                                    </div>
+                                <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center">
+                                    {getDeviceIcon(device.resource_type)}
                                 </div>
-                                <h3 className="text-sm font-bold text-white truncate w-full mb-1" title={device.device_name.toUpperCase()}>
-                                    {device.device_name.toUpperCase()}
-                                </h3>
-                                <div className="mt-auto">
-                                    <p className="text-[10px] text-gray-500 uppercase font-bold truncate">{device.device_type}</p>
-                                    <p className="text-[10px] text-green-500/70 truncate">{device.os}</p>
+                                <div className="flex-grow mx-4">
+                                    <h3 className="text-sm font-bold text-white truncate" title={(device.resource_name || '').toUpperCase()}>
+                                        {(device.resource_name || '').toUpperCase()}
+                                    </h3>
+                                    <p className="text-xs text-gray-500 truncate">{device.resource_type}</p>
+                                </div>
+                                <div className="flex-shrink-0 w-48 text-xs text-green-500/70 truncate text-right" title={device.os}>
+                                    {device.os}
+                                </div>
+                                <div className="flex-shrink-0 w-20 text-right">
+                                    <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
+                                        {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : "0.0"}
+                                    </span>
                                 </div>
                             </div>
                         ))}
@@ -300,7 +389,7 @@ const NetboxVulnerabilities = () => {
                 <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
                     <div className="bg-gray-900 p-6 rounded-lg max-w-3xl w-full border-2 border-gray-700">
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-2xl font-bold text-green-500">{selectedDevice.device_name.toUpperCase()}</h2>
+                            <h2 className="text-2xl font-bold text-green-500">{(selectedDevice.resource_name || '').toUpperCase()}</h2>
                             <button onClick={() => setSelectedDevice(null)}>
                                 <X className="text-gray-400" />
                             </button>

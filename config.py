@@ -1,7 +1,3 @@
 # backend/config.py
 
-NETBOX_ROLES = [
-    "switch-corp-core",
-    "blade-esxi",
-    "arubaappliance"
-]
+# Removed NETBOX_ROLES as they are no longer used.

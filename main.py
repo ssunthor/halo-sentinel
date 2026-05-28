@@ -24,7 +24,6 @@ from functools import partial
 import math
 from functools import lru_cache
 from feed_cache import get_from_cache, set_in_cache
-from config import NETBOX_ROLES
 import math
 import uvloop
 import random
@@ -56,6 +55,14 @@ except ImportError:
             return s.replace(': NaN', ': null').replace(': Infinity', ': null').replace(': -Infinity', ': null')
 
     def json_loads(x): return json.loads(x)
+
+def load_cache(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, "r") as f: return json_loads(f.read())
+    return {}
+
+def save_cache(file_path, data):
+    with open(file_path, "w") as f: f.write(json_dumps(data))
 
 # --- CONFIGURATION ---
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -102,29 +109,29 @@ KAFKA_CONSUMER = f"morpheus_dashboard_backend_{uuid.uuid4().hex}"
 COMMON_KAFKA_CONF = {
     'group.id': KAFKA_CONSUMER,
     'auto.offset.reset': 'latest',
-    'max.partition.fetch.bytes': 4 * 1024 * 1024, 
-    'fetch.message.max.bytes': 4 * 1024 * 1024, 
+    'max.partition.fetch.bytes': 4 * 1024 * 1024,
+    'fetch.message.max.bytes': 4 * 1024 * 1024,
     'fetch.wait.max.ms': 500,
-    'fetch.min.bytes': 1 * 1024 * 1024, 
+    'fetch.min.bytes': 1 * 1024 * 1024,
     'socket.receive.buffer.bytes': 1024 * 1024,
-    'session.timeout.ms': 45000, 
+    'session.timeout.ms': 45000,
 }
 
-KAFKA_CONF_SECURITY = { 
-    'bootstrap.servers': os.getenv("KAFKA_SECURITY_SERVERS", "10.250.133.163:29092"), 
-    **COMMON_KAFKA_CONF 
+KAFKA_CONF_SECURITY = {
+    'bootstrap.servers': os.getenv("KAFKA_SECURITY_SERVERS", "10.250.133.163:29092"),
+    **COMMON_KAFKA_CONF
 }
 TOPIC_SECURITY = os.getenv("KAFKA_SECURITY_TOPIC", "morpheus-output")
 
-KAFKA_CONF_NETFLOW = { 
-    'bootstrap.servers': os.getenv("KAFKA_NETFLOW_SERVERS", "10.250.133.163:29092"), 
-    **COMMON_KAFKA_CONF 
+KAFKA_CONF_NETFLOW = {
+    'bootstrap.servers': os.getenv("KAFKA_NETFLOW_SERVERS", "10.250.133.163:29092"),
+    **COMMON_KAFKA_CONF
 }
 TOPIC_NETFLOW = os.getenv("KAFKA_NETFLOW_TOPIC", "netflow-dfp-output")
 
-KAFKA_CONF_NETFLOW_V9 = { 
-    'bootstrap.servers': os.getenv("KAFKA_NETFLOW_V9_SERVERS", "10.250.133.29:9092,10.250.133.30:9092,10.250.133.31:9092"), 
-    **COMMON_KAFKA_CONF 
+KAFKA_CONF_NETFLOW_V9 = {
+    'bootstrap.servers': os.getenv("KAFKA_NETFLOW_V9_SERVERS", "10.250.133.29:9092,10.250.133.30:9092,10.250.133.31:9092"),
+    **COMMON_KAFKA_CONF
 }
 TOPIC_NETFLOW_V9 = os.getenv("KAFKA_NETFLOW_V9_TOPIC", "netflow_raw")
 
@@ -149,12 +156,22 @@ LLM_ANALYSIS_CACHE_FILE = os.path.join(CACHE_DIR, "llm_analysis_cache.json")
 OVERALL_SUMMARY_CACHE_FILE = os.path.join(CACHE_DIR, "overall_summary_cache.json")
 OVERALL_ANALYSIS_CACHE_FILE = os.path.join(CACHE_DIR, "overall_analysis_cache.json")
 
-vulnerable_devices_cache = {}
+vulnerable_devices_cache = []
+cve_cache = {}
+llm_analysis_cache = {}
 overall_summary_cache = ""
 overall_analysis_cache = ""
 INITIAL_SCAN_COMPLETE = False
 SCAN_IN_PROGRESS = False
 if not os.path.exists(CACHE_DIR): os.makedirs(CACHE_DIR, exist_ok=True)
+
+# Initialize caches
+cve_cache = load_cache(CVE_CACHE_FILE)
+llm_analysis_cache = load_cache(LLM_ANALYSIS_CACHE_FILE)
+overall_summary_cache = load_cache(OVERALL_SUMMARY_CACHE_FILE)
+if not isinstance(overall_summary_cache, str): overall_summary_cache = ""
+overall_analysis_cache = load_cache(OVERALL_ANALYSIS_CACHE_FILE)
+if not isinstance(overall_analysis_cache, str): overall_analysis_cache = ""
 
 thread_pool = ThreadPoolExecutor(max_workers=16)
 dns_pool = ThreadPoolExecutor(max_workers=32)
@@ -176,19 +193,14 @@ USER_PATTERNS = [
 ]
 
 INVALID_USERS = {
-    'slice', 'manager', 'target', 'service', 'daemon', 'process', 'system', 
+    'slice', 'manager', 'target', 'service', 'daemon', 'process', 'system',
     'unknown', 'failed', 'error', 'start', 'stop', 'reached', 'listening',
     'dependency', 'socket', 'path', 'timer', 'swap', 'device', 'mount', 'automount',
     'session', 'scope', 'unit', 'job', 'start', 'result', 'done', 'starting', 'stopped',
     'message', 'runtime', 'application', 'with', 'successful', 'input', 'none', 'username',
     'audit', 'login', 'logout', 'authenticated', 'disconnected', 'from', 'user', 'pam_unix',
-    'cron', '80', 'acct', 'child', 'msg', 'Background', 
+    'cron', '80', 'acct', 'child', 'msg', 'Background',
 }
-
-try:
-    from config import NETBOX_ROLES
-except ImportError:
-    NETBOX_ROLES = ["Server", "Router", "Switch", "Firewall"]
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -223,16 +235,6 @@ def json_dumps_bytes(x):
     # option=orjson.OPT_NON_STR_KEYS handles non-string dictionary keys if necessary
     return orjson.dumps(x, option=orjson.OPT_SERIALIZE_NUMPY)
     
-@app.get("/netbox/roles")
-async def get_netbox_roles():
-    """
-    Returns the list of configured Netbox roles.
-    If vulnerable_devices_cache is populated, returns its keys (sorted).
-    """
-    if vulnerable_devices_cache:
-        return sorted(list(vulnerable_devices_cache.keys()))
-    return NETBOX_ROLES
-
 @app.get("/cve-proxy")
 async def cve_proxy():
     cached_data = get_from_cache("cve_feed")
@@ -430,14 +432,6 @@ def get_geoip(ip):
         }
     except: 
         return mock_geo(ip)
-
-def load_cache(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, "r") as f: return json_loads(f.read())
-    return {}
-
-def save_cache(file_path, data):
-    with open(file_path, "w") as f: f.write(json_dumps(data))
 
 def clean_float(val):
     try:
@@ -1763,12 +1757,15 @@ Raw Event Data: {log_msg[:1000]}
 Provide a concise, one-sentence "AI Insight" explaining what this actually means for a human operator. Focus on the behavior, not the numbers."""
 
                 # 2. Call LLM
-                messages = [
-                    {"role": "system", "content": "You are a senior security analyst providing concise insights."},
-                    {"role": "user", "content": prompt}
-                ]
+                def call_llm():
+                    messages = [
+                        {"role": "system", "content": "You are a senior security analyst providing concise insights."},
+                        {"role": "user", "content": prompt}
+                    ]
+                    return vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=256)
                 
-                response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=256)
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(thread_pool, call_llm)
                 
                 if response and "content" in response:
                     insight = response["content"].strip()
@@ -1800,14 +1797,23 @@ Provide a concise, one-sentence "AI Insight" explaining what this actually means
 host_analysis_broker = None # Initialized in startup
 
 class VulnerabilityRequestBroker:
-    def __init__(self, cve_cache):
+    def __init__(self, cve_cache_ref):
         self.queue = asyncio.Queue()
-        self.cve_cache = cve_cache
+        self.cve_cache = cve_cache_ref
         self.processed_requests = {}
+        self.in_flight = {} # query -> list of events
+
+    def _normalize_query(self, query: str) -> str:
+        if not query: return ""
+        # Remove extra whitespace and normalize to single spaces
+        return re.sub(r'\s+', ' ', query.strip())
+
     async def worker(self, client):
         while True:
-            search_query, event = await self.queue.get()
+            search_query, _ = await self.queue.get()
+            
             if search_query in self.cve_cache:
+                print(f"      ⚡ CVE CACHE: Hit for '{search_query}'")
                 cves_data = self.cve_cache[search_query]
             else:
                 encoded = urllib.parse.quote(search_query)
@@ -1817,9 +1823,9 @@ class VulnerabilityRequestBroker:
                     resp = await client.get(url, timeout=30)
                     if resp.status_code == 200:
                         cves_data = resp.json()
-                        # ONLY cache if we actually got a 200 OK
                         self.cve_cache[search_query] = cves_data
                         print(f"      ✅ NVD API: Found {len(cves_data.get('vulnerabilities', []))} CVEs for '{search_query}'")
+                        save_cache(CVE_CACHE_FILE, self.cve_cache)
                     else:
                         print(f"      ❌ NVD API Error {resp.status_code} for '{search_query}'")
                         cves_data = {"vulnerabilities": []}
@@ -1827,38 +1833,60 @@ class VulnerabilityRequestBroker:
                     print(f"      ❌ NVD API Exception for '{search_query}': {e}")
                     cves_data = {"vulnerabilities": []}
                 
-                # NVD Rate limiting: 10 seconds between requests
                 await asyncio.sleep(10)
             
             self.processed_requests[search_query] = cves_data
-            event.set()
+            
+            # Notify all waiters for this specific query
+            if search_query in self.in_flight:
+                waiters = self.in_flight.pop(search_query)
+                for ev in waiters:
+                    ev.set()
+            
             self.queue.task_done()
+
     async def request_vulnerabilities(self, search_query):
-        if search_query in self.processed_requests: return self.processed_requests[search_query]
-        if search_query in self.cve_cache: return self.cve_cache[search_query]
+        norm_query = self._normalize_query(search_query)
+        if norm_query in self.processed_requests: return self.processed_requests[norm_query]
+        if norm_query in self.cve_cache: return self.cve_cache[norm_query]
+        
+        # If already being fetched, just join the waiting list
+        if norm_query in self.in_flight:
+            event = asyncio.Event()
+            self.in_flight[norm_query].append(event)
+            await event.wait()
+            return self.processed_requests[norm_query]
+        
+        # New unique request
         event = asyncio.Event()
-        await self.queue.put((search_query, event))
+        self.in_flight[norm_query] = [event]
+        await self.queue.put((norm_query, event))
         await event.wait()
-        return self.processed_requests[search_query]
+        return self.processed_requests[norm_query]
 
 async def get_llm_analysis(resource_name, model, os_info, cves):
     """
     Calls the LLM to analyze the risk of specific CVEs on a specific resource.
+    Uses thread_pool to avoid blocking the event loop.
     """
-    try:
-        cve_list = "\n".join([f"- {c['id']}: {c['description']} (Score: {c['score']})" for c in cves])
-        prompt = f"Analyze the security risk for resource '{resource_name}' (Model: {model}, OS: {os_info}).\n\nThe following vulnerabilities were found:\n{cve_list}\n\nProvide a concise assessment of the impact and recommended actions."
+    def call_llm():
+        try:
+            cve_list = "\n".join([f"- {c['id']}: {c['description']} (Score: {c['score']})" for c in cves])
+            prompt = f"Analyze the security risk for resource '{resource_name}' (Model: {model}, OS: {os_info}).\n\nThe following vulnerabilities were found:\n{cve_list}\n\nProvide a concise assessment of the impact and recommended actions."
 
-        messages = [{"role": "user", "content": prompt}]
-        response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=2048)
-        
-        if response and "content" in response:
-            return response["content"].strip()
-        return "Analysis unavailable."
-    except Exception as e:
-        return f"Analysis failed: {str(e)}"
+            messages = [{"role": "user", "content": prompt}]
+            response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=2048)
+            
+            if response and "content" in response:
+                return response["content"].strip()
+            return "Analysis unavailable."
+        except Exception as e:
+            return f"Analysis failed: {str(e)}"
 
-async def process_netbox_resource(resource, resource_type, client, cve_cache, llm_analysis_cache, broker):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(thread_pool, call_llm)
+
+async def process_netbox_resource(resource, resource_type, client, cve_cache, llm_analysis_cache, broker, update_callback=None):
     resource_name = resource.get("name") or f"Resource-{resource.get('id')}"
     
     if resource_type == "device":
@@ -1887,13 +1915,6 @@ async def process_netbox_resource(resource, resource_type, client, cve_cache, ll
     if not os_name or not os_version:
         print(f"      ⏭️ Skipping {resource_name}: Missing Platform ({os_name}) or OS Version ({os_version})")
         
-        # Correctly determine the role name based on resource type
-        if resource_type == "vm":
-            role_info = resource.get("role")
-        else:
-            role_info = resource.get("device_role")
-        role_name = role_info.get("name") if role_info else "Unknown"
-
         return { 
             "resource_name": resource_name, 
             "os": f"{os_name or 'Unknown'} {os_version or 'Unknown'}", 
@@ -1902,8 +1923,7 @@ async def process_netbox_resource(resource, resource_type, client, cve_cache, ll
             "highest_severity_score": 0.0, 
             "cves": [], 
             "is_vulnerable": False, 
-            "llm_analysis": "Status Unknown: Missing required NetBox fields (Platform or OS Version) for vulnerability correlation.",
-            "role": role_name
+            "llm_analysis": "Status Unknown: Missing required NetBox fields (Platform or OS Version) for vulnerability correlation."
         }
 
     print(f"      🔎 Scanning {resource_name}...")
@@ -1962,7 +1982,6 @@ async def process_netbox_resource(resource, resource_type, client, cve_cache, ll
     
     # --- First Search Attempt ---
     try:
-        print(f"      🌐 NVD API: Searching for '{current_search_query}'...")
         cves_data_result = await broker.request_vulnerabilities(current_search_query)
         raw_vulnerabilities_result = cves_data_result.get("vulnerabilities", [])
         
@@ -2055,24 +2074,8 @@ async def process_netbox_resource(resource, resource_type, client, cve_cache, ll
                     "severity": cvss_data.get("baseSeverity") or metric.get("baseSeverity") or "UNKNOWN"
                 })
         
-        # --- Post-Processing (Outside the Loop) ---
-        llm_analysis = "No vulnerabilities detected. No analysis required."
-        if device_cves:
-            key = f"{resource_name}-{'-'.join(sorted([c['id'] for c in device_cves]))}"
-            if key in llm_analysis_cache: 
-                llm_analysis = llm_analysis_cache[key]
-            else:
-                llm_analysis = await get_llm_analysis(resource_name, model, f"{os_name} {os_version or ''}", device_cves)
-                llm_analysis_cache[key] = llm_analysis
-        
-        # Correctly determine the role name based on resource type
-        if resource_type == "vm":
-            role_info = resource.get("role")
-        else:
-            role_info = resource.get("device_role")
-        role_name = role_info.get("name") if role_info else "Unknown"
-
-        return { 
+        # --- Incremental Update (After CVE discovery, before LLM) ---
+        partial_res = {
             "resource_name": resource_name, 
             "os": f"{os_name} {os_version or ''}", 
             "resource_type": model, 
@@ -2080,13 +2083,32 @@ async def process_netbox_resource(resource, resource_type, client, cve_cache, ll
             "highest_severity_score": highest, 
             "cves": device_cves, 
             "is_vulnerable": len(device_cves) > 0, 
-            "llm_analysis": llm_analysis,
-            "role": role_name
+            "llm_analysis": "Analyzing vulnerabilities..." if device_cves else "No vulnerabilities detected. No analysis required."
         }
+        if update_callback:
+            await update_callback(partial_res)
+
+        # --- Post-Processing (LLM Analysis) ---
+        llm_analysis = partial_res["llm_analysis"]
+        if device_cves:
+            key = f"{resource_name}-{'-'.join(sorted([c['id'] for c in device_cves]))}"
+            if key in llm_analysis_cache: 
+                llm_analysis = llm_analysis_cache[key]
+            else:
+                llm_analysis = await get_llm_analysis(resource_name, model, f"{os_name} {os_version or ''}", device_cves)
+                llm_analysis_cache[key] = llm_analysis
+                save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)
+        
+        final_res = {**partial_res, "llm_analysis": llm_analysis}
+        if update_callback:
+            await update_callback(final_res)
+
+        return final_res
     except Exception as e:
         print(f"      ❌ Error processing {resource_name}: {e}")
-        return {
+        err_res = {
             "resource_name": resource_name, 
+            "os": f"{os_name or 'Unknown'} {os_version or ''}",
             "is_vulnerable": False, 
             "resource_type": model, 
             "resource_category": resource_type,
@@ -2095,243 +2117,155 @@ async def process_netbox_resource(resource, resource_type, client, cve_cache, ll
             "llm_analysis": f"Error: {str(e)}",
             "reason": f"Error: {str(e)}"
         }
+        if update_callback:
+            await update_callback(err_res)
+        return err_res
 
 async def update_netbox_resource_vulnerabilities(resource_type: str):
     global vulnerable_devices_cache
+    global cve_cache
+    global llm_analysis_cache
     
     headers = {"Authorization": f"Token {NETBOX_TOKEN}", "Content-Type": "application/json", "Accept": "application/json"}
-    cve_cache = load_cache(CVE_CACHE_FILE)
-    llm_analysis_cache = load_cache(LLM_ANALYSIS_CACHE_FILE)
     broker = VulnerabilityRequestBroker(cve_cache)
     
     async with httpx.AsyncClient(verify=False) as client:
         broker_task = asyncio.create_task(broker.worker(client))
         
-        if NETBOX_TENANT_ID:
-            try:
+        try:
+            if NETBOX_TENANT_ID:
                 print(f"🔍 NETBOX: Starting vulnerability scan for Tenant ID: {NETBOX_TENANT_ID}")
                 # limit=0 is the NetBox way to request all results in one go (or up to MAX_PAGE_SIZE)
                 if resource_type=="vm":
                     url = f"{NETBOX_URL}/api/virtualization/virtual-machines/?tenant_id={NETBOX_TENANT_ID}&status=active&limit=0"
                 else:
                     url = f"{NETBOX_URL}/api/dcim/devices/?tenant_id={NETBOX_TENANT_ID}&status=active&limit=0"
-                all_devices = []
-                page = 1
-                while url:
-                    print(f"  📡 Fetching page {page} of devices for tenant {NETBOX_TENANT_ID} from {url}...")
-                    try:
-                        resp = await client.get(url, headers=headers, timeout=60)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            total_count = data.get("count", "unknown")
-                            results = data.get("results", [])
-                            all_devices.extend(results)
-                            print(f"    ✅ Page {page}: Received {len(results)} devices (Total so far: {len(all_devices)} / {total_count})")
-                            url = data.get("next")
-                            page += 1
-                        else:
-                            print(f"    ❌ Error fetching devices for tenant {NETBOX_TENANT_ID}: {resp.status_code} {resp.text}")
-                            break
-                    except Exception as ge:
-                        print(f"    ❌ HTTP Error fetching page {page}: {ge}")
-                        traceback.print_exc()
-                        break
-                
-                # Group devices by role
-                print(f"📦 Total devices fetched: {len(all_devices)}. Grouping by role and initializing cache...")
-                devices_by_role = defaultdict(list)
-                for d in all_devices:
-                    # Role field differs between devices and VMs
-                    if resource_type == "vm":
-                        role_info = d.get("role")
-                        model = (d.get("cluster") or {}).get("name") or "Unknown Cluster"
-                        platform_info = d.get("platform")
-                        os_name = platform_info.get("name") if platform_info else None
-                        os_version = d.get("custom_fields", {}).get("os_version")
-                    else:
-                        role_info = d.get("device_role")
-                        model = (d.get("device_type") or {}).get("model") or "Unknown Model"
-                        platform_info = d.get("platform")
-                        os_name = platform_info.get("name") if platform_info else None
-                        os_version = d.get("custom_fields", {}).get("os_build")
+            else:
+                print(f"🔍 NETBOX: Starting global vulnerability scan for all resources")
+                if resource_type=="vm":
+                    url = f"{NETBOX_URL}/api/virtualization/virtual-machines/?status=active&limit=0"
+                else:
+                    url = f"{NETBOX_URL}/api/dcim/devices/?status=active&limit=0"
 
-                    role_name = role_info.get("name") if role_info else "Unknown"
-                    resource_name = d.get("name") or f"Resource-{d.get('id')}"
-                    
-                    # Initialize skeleton entry
-                    skeleton = {
-                        "resource_name": resource_name, 
-                        "os": f"{os_name or 'Unknown'} {os_version or ''}", 
-                        "resource_type": model, 
-                        "resource_category": resource_type,
-                        "highest_severity_score": 0.0, 
-                        "cves": [], 
-                        "is_vulnerable": False, 
-                        "llm_analysis": "Scanning...",
-                        "role": role_name
-                    }
-                    
-                    # Add to global cache immediately for real-time populate
-                    if role_name not in vulnerable_devices_cache:
-                        vulnerable_devices_cache[role_name] = []
-                    
-                    # Check if device already exists (avoid duplicates during incremental update)
-                    existing_idx = next((i for i, x in enumerate(vulnerable_devices_cache[role_name]) if x["resource_name"] == resource_name), -1)
-                    if existing_idx != -1:
-                        vulnerable_devices_cache[role_name][existing_idx] = skeleton
-                    else:
-                        vulnerable_devices_cache[role_name].append(skeleton)
-
-                    devices_by_role[role_name].append(d)
-                
-                print(f"📁 Found {len(devices_by_role)} distinct roles for this tenant.")
-
-                # --- DEDUPLICATION STEP ---
-                unique_queries = set()
-
-                print("  🎯 Collecting unique search queries across all devices...")
-                for role_name, devices in devices_by_role.items():
-                    for d in devices:
-                        # STRICT REQUIREMENT: Platform Name AND os_build/os_version
-                        platform_info = d.get("platform")
-                        os_name = platform_info.get("name") if platform_info else None
-                        
-                        if resource_type == "vm":
-                            os_version = d.get("custom_fields", {}).get("os_version")
-                        else:
-                            os_version = d.get("custom_fields", {}).get("os_build")
-
-                        if not os_name or not os_version:
-                            continue
-
-                        # Simple cleaning: remove leading 'v' and extract core version for Fortinet
-                        version_clean = re.sub(r'^v', '', str(os_version))
-                        if "forti" in os_name.lower():
-                            match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
-                            if match: version_clean = match.group(1)
-
-                        query = f"{os_name} {version_clean}"
-                        unique_queries.add(query)
-
-                print(f"  ✨ Found {len(unique_queries)} unique queries for {len(all_devices)} devices.")
-                # Pre-fetch all unique queries
-                query_tasks = [broker.request_vulnerabilities(q) for q in unique_queries]
-                if query_tasks:
-                    print(f"  🌐 Pre-fetching {len(query_tasks)} unique vulnerability datasets from NVD...")
-                    await asyncio.gather(*query_tasks)
-
-                # Collect all process tasks across all roles
-                all_process_tasks = []
-                for role_name, devices in devices_by_role.items():
-                    for d in devices:
-                        all_process_tasks.append(process_netbox_resource(d, resource_type, client, cve_cache, llm_analysis_cache, broker))
-
-                # Now process all devices concurrently and update cache as they finish
-                print(f"  📡 Processing {len(all_process_tasks)} resources concurrently...")
-                for coro in asyncio.as_completed(all_process_tasks):
-                    r = await coro
-                    if r:
-                        r_name = r["resource_name"]
-                        r_role = r["role"]
-                        if r_role in vulnerable_devices_cache:
-                            idx = next((i for i, x in enumerate(vulnerable_devices_cache[r_role]) if x["resource_name"] == r_name), -1)
-                            if idx != -1:
-                                vulnerable_devices_cache[r_role][idx] = r
-                            else:
-                                vulnerable_devices_cache[r_role].append(r)
-                            
-                            # Re-sort the role list by severity
-                            vulnerable_devices_cache[r_role].sort(key=lambda x: x.get("highest_severity_score", 0), reverse=True)
-
-            except Exception as te:
-                print(f"  ❌ Critical Error in Tenant Scan: {te}")
-                traceback.print_exc()
-        else:
-            print(f"🔍 NETBOX: Starting vulnerability scan for roles: {NETBOX_ROLES}")
-            all_process_tasks = []
-            for role in NETBOX_ROLES:
+            all_devices = []
+            page = 1
+            while url:
+                print(f"  📡 Fetching page {page} of resources from {url}...")
                 try:
-                    devices = []
-                    if resource_type == "vm":
-                        url = f"{NETBOX_URL}/api/virtualization/virtual-machines/?role={role.lower()}"
+                    resp = await client.get(url, headers=headers, timeout=60)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        total_count = data.get("count", "unknown")
+                        results = data.get("results", [])
+                        all_devices.extend(results)
+                        print(f"    ✅ Page {page}: Received {len(results)} resources (Total so far: {len(all_devices)} / {total_count})")
+                        url = data.get("next")
+                        page += 1
                     else:
-                        url = f"{NETBOX_URL}/api/dcim/devices/?role={role.lower()}"
-                    print(f"  📡 Fetching devices for role '{role}' from {url}")
-                    while url:
-                        resp = await client.get(url, headers=headers)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            results = data.get("results", [])
-                            devices.extend(results)
-                            url = data.get("next")
-                        else: 
-                            print(f"    ❌ Error fetching devices for role '{role}': {resp.status_code}")
-                            break
-                    
-                    if devices:
-                        # Initialize skeleton entries for this role
-                        if role not in vulnerable_devices_cache:
-                            vulnerable_devices_cache[role] = []
-                        
-                        for d in devices:
-                            r_name = d.get("name") or f"Resource-{d.get('id')}"
-                            if resource_type == "vm":
-                                model = (d.get("cluster") or {}).get("name") or "Unknown Cluster"
-                            else:
-                                model = (d.get("device_type") or {}).get("model") or "Unknown Model"
-                            
-                            p_info = d.get("platform")
-                            o_name = p_info.get("name") if p_info else None
-                            if resource_type == "vm":
-                                o_version = d.get("custom_fields", {}).get("os_version")
-                            else:
-                                o_version = d.get("custom_fields", {}).get("os_build")
+                        print(f"    ❌ Error fetching resources: {resp.status_code} {resp.text}")
+                        break
+                except Exception as ge:
+                    print(f"    ❌ HTTP Error fetching page {page}: {ge}")
+                    traceback.print_exc()
+                    break
+            
+            print(f"📦 Total resources fetched: {len(all_devices)}. Initializing cache...")
+            for d in all_devices:
+                # Role field differs between devices and VMs
+                if resource_type == "vm":
+                    model = (d.get("cluster") or {}).get("name") or "Unknown Cluster"
+                    platform_info = d.get("platform")
+                    os_name = platform_info.get("name") if platform_info else None
+                    os_version = d.get("custom_fields", {}).get("os_version")
+                else:
+                    model = (d.get("device_type") or {}).get("model") or "Unknown Model"
+                    platform_info = d.get("platform")
+                    os_name = platform_info.get("name") if platform_info else None
+                    os_version = d.get("custom_fields", {}).get("os_build")
 
-                            skeleton = {
-                                "resource_name": r_name, 
-                                "os": f"{o_name or 'Unknown'} {o_version or ''}", 
-                                "resource_type": model, 
-                                "resource_category": resource_type,
-                                "highest_severity_score": 0.0, 
-                                "cves": [], 
-                                "is_vulnerable": False, 
-                                "llm_analysis": "Scanning...",
-                                "role": role
-                            }
-                            
-                            existing_idx = next((i for i, x in enumerate(vulnerable_devices_cache[role]) if x["resource_name"] == r_name), -1)
-                            if existing_idx != -1:
-                                vulnerable_devices_cache[role][existing_idx] = skeleton
-                            else:
-                                vulnerable_devices_cache[role].append(skeleton)
+                resource_name = d.get("name") or f"Resource-{d.get('id')}"
+                
+                # Initialize skeleton entry
+                skeleton = {
+                    "resource_name": resource_name, 
+                    "os": f"{os_name or 'Unknown'} {os_version or ''}", 
+                    "resource_type": model, 
+                    "resource_category": resource_type,
+                    "highest_severity_score": 0.0, 
+                    "cves": [], 
+                    "is_vulnerable": False, 
+                    "llm_analysis": "Scanning..."
+                }
+                
+                # Check if device already exists (avoid duplicates during incremental update)
+                existing_idx = next((i for i, x in enumerate(vulnerable_devices_cache) if x["resource_name"] == resource_name), -1)
+                if existing_idx != -1:
+                    vulnerable_devices_cache[existing_idx] = skeleton
+                else:
+                    vulnerable_devices_cache.append(skeleton)
 
-                            all_process_tasks.append(process_netbox_resource(d, resource_type, client, cve_cache, llm_analysis_cache, broker))
-                    else:
-                        if role not in vulnerable_devices_cache:
-                            vulnerable_devices_cache[role] = []
-                except Exception as e: 
-                    print(f"  ❌ Netbox Error {role}: {e}")
+            # --- DEDUPLICATION STEP ---
+            unique_queries = set()
 
-            # Process all gathered tasks for the 'else' branch
+            print("  🎯 Collecting unique search queries across all resources...")
+            for d in all_devices:
+                # STRICT REQUIREMENT: Platform Name AND os_build/os_version
+                platform_info = d.get("platform")
+                os_name = platform_info.get("name") if platform_info else None
+                
+                if resource_type == "vm":
+                    os_version = d.get("custom_fields", {}).get("os_version")
+                else:
+                    os_version = d.get("custom_fields", {}).get("os_build")
+
+                if not os_name or not os_version:
+                    continue
+
+                # Simple cleaning: remove leading 'v' and extract core version for Fortinet
+                version_clean = re.sub(r'^v', '', str(os_version))
+                if "forti" in os_name.lower():
+                    match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
+                    if match: version_clean = match.group(1)
+
+                query = f"{os_name} {version_clean}"
+                unique_queries.add(query)
+
+            print(f"  ✨ Found {len(unique_queries)} unique queries for {len(all_devices)} resources.")
+            
+            # Start individual process tasks immediately to enable streaming
+            sem = asyncio.Semaphore(20) # Limit concurrency to 20 resources at a time
+            
+            async def update_cache(res):
+                r_name = res["resource_name"]
+                # Use a lock-like approach for thread safety if needed, but here we are in same event loop
+                idx = next((i for i, x in enumerate(vulnerable_devices_cache) if x["resource_name"] == r_name), -1)
+                if idx != -1:
+                    vulnerable_devices_cache[idx] = res
+                else:
+                    vulnerable_devices_cache.append(res)
+                # Sort the list by severity
+                vulnerable_devices_cache.sort(key=lambda x: x.get("highest_severity_score", 0), reverse=True)
+
+            async def sem_process(d):
+                async with sem:
+                    return await process_netbox_resource(d, resource_type, client, cve_cache, llm_analysis_cache, broker, update_callback=update_cache)
+
+            all_process_tasks = [sem_process(d) for d in all_devices]
+
+            # Now process all resources concurrently
             if all_process_tasks:
-                print(f"  📡 Processing {len(all_process_tasks)} resources concurrently...")
-                for coro in asyncio.as_completed(all_process_tasks):
-                    r = await coro
-                    if r:
-                        r_name = r["resource_name"]
-                        r_role = r["role"]
-                        if r_role in vulnerable_devices_cache:
-                            idx = next((i for i, x in enumerate(vulnerable_devices_cache[r_role]) if x["resource_name"] == r_name), -1)
-                            if idx != -1:
-                                vulnerable_devices_cache[r_role][idx] = r
-                            vulnerable_devices_cache[r_role].sort(key=lambda x: x.get("highest_severity_score", 0), reverse=True)
+                print(f"  📡 Processing {len(all_process_tasks)} resources with concurrency limit 20...")
+                await asyncio.gather(*all_process_tasks)
+
+        except Exception as te:
+            print(f"  ❌ Critical Error in Netbox Scan: {te}")
+            traceback.print_exc()
         
         await broker.queue.join()
         broker_task.cancel()
 
-    save_cache(CVE_CACHE_FILE, cve_cache)
-    save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)
-    await get_overall_summary([d for role in vulnerable_devices_cache.values() for d in role])
+    await get_overall_summary(vulnerable_devices_cache)
+
 
 async def get_overall_summary(devices):
     global overall_summary_cache
@@ -2343,8 +2277,12 @@ async def get_overall_summary(devices):
     print(f"📝 NETBOX: Generating overall summary for {len(vuln)} vulnerable devices...")
     summary_input = "\n".join([f"- {d['resource_name']}: {d.get('llm_analysis')}" for d in vuln])
     try:
-        messages = [{"role": "user", "content": f"Summarize the following security vulnerabilities found across our network infrastructure:\n{summary_input}" }]
-        response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=4096)
+        def call_llm():
+            messages = [{"role": "user", "content": f"Summarize the following security vulnerabilities found across our network infrastructure:\n{summary_input}" }]
+            return vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=4096)
+        
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(thread_pool, call_llm)
         
         if response and "content" in response:
             overall_summary_cache = response["content"].strip()
@@ -2392,8 +2330,12 @@ async def get_overall_analysis(data):
     print("DEBUG: Starting Overall Analysis LLM Call...")
     global overall_analysis_cache
     try:
-        messages = [{"role": "user", "content": f"Analyze the following security event data and provide a high-level summary of anomalies and threats:\n{json.dumps(data)}"}]
-        response = vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=8192)
+        def call_llm():
+            messages = [{"role": "user", "content": f"Analyze the following security event data and provide a high-level summary of anomalies and threats:\n{json.dumps(data)}"}]
+            return vllm_client.get_chat_completion(messages, temperature=0.1, json_mode=False, max_tokens=8192)
+        
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(thread_pool, call_llm)
         
         if response and "content" in response:
             content = response["content"].strip()
@@ -2419,9 +2361,9 @@ async def overall_analysis_worker():
 async def get_status(): return {"initial_scan_complete": INITIAL_SCAN_COMPLETE, "scan_in_progress": SCAN_IN_PROGRESS}
 
 @app.get("/netbox/vulnerabilities")
-async def get_netbox_vulnerabilities(role: str = ''):
+async def get_netbox_vulnerabilities():
     """
-    Returns a list of scanned devices from the cache, optionally filtered by role.
+    Returns a list of scanned devices from the cache.
     Includes both vulnerable and 'Scanning...' devices for real-time progress.
     """
     if not vulnerable_devices_cache:
@@ -2430,13 +2372,7 @@ async def get_netbox_vulnerabilities(role: str = ''):
     def is_physical_device(device):
         return device.get('resource_category') == 'device'
 
-    results = []
-    if role and role in vulnerable_devices_cache:
-        results = [d for d in vulnerable_devices_cache[role] if is_physical_device(d)]
-    else:
-        results = [device for role_list in vulnerable_devices_cache.values() for device in role_list if is_physical_device(device)]
-    
-    return results
+    return [d for d in vulnerable_devices_cache if is_physical_device(d)]
 
 @app.get("/netbox/virtual-machines")
 async def get_netbox_virtual_machines(status: str = '', tenant_id: str = ''):
@@ -2450,9 +2386,7 @@ async def get_netbox_virtual_machines(status: str = '', tenant_id: str = ''):
     def is_virtual_machine(device):
         return device.get('resource_category') == 'vm'
 
-    results = [device for role_list in vulnerable_devices_cache.values() for device in role_list if is_virtual_machine(device)]
-    
-    return results
+    return [d for d in vulnerable_devices_cache if is_virtual_machine(d)]
 
 @app.get("/netbox/overall-summary")
 async def get_overall_summary_endpoint(): return overall_summary_cache
@@ -2509,7 +2443,11 @@ async def chat_endpoint(request: ChatRequest):
             {"role": "user", "content": request.message}
         ]
         
-        response = vllm_client.get_chat_completion(messages, temperature=0.2, json_mode=False, max_tokens=1024)
+        def call_llm():
+            return vllm_client.get_chat_completion(messages, temperature=0.2, json_mode=False, max_tokens=1024)
+        
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(thread_pool, call_llm)
         
         if response and "content" in response:
             return {"response": response["content"].strip()}

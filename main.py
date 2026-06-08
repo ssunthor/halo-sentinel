@@ -219,6 +219,13 @@ country_reader = None
 if os.path.exists(GEOIP_COUNTRY_DB_PATH):
     country_reader = geoip2.database.Reader(GEOIP_COUNTRY_DB_PATH)
 
+def is_rfc1918(ip):
+    if ip.startswith("10.") or ip.startswith("192.168."): return True
+    if ip.startswith("172."):
+        parts = ip.split(".")
+        if len(parts) > 1 and 16 <= int(parts[1]) <= 31: return True
+    return False
+
 def get_asn(ip):
     if not asn_reader or not ip: return None
     try:
@@ -1395,7 +1402,8 @@ def process_log_into_batch(raw_bytes, batch):
             p_up = proto_raw.upper()
             proto = 6 if p_up == "TCP" else 17 if p_up == "UDP" else 1 if p_up == "ICMP" else int(proto_raw) if proto_raw.isdigit() else 0
         else: proto = int(proto_raw or 0)
-            
+        protocol_label = {6: "TCP", 17: "UDP", 1: "ICMP"}.get(proto) or (str(proto) if proto else None)
+
         bytes_val = math.exp(float(payload["log_bytes"])) - 1 if "log_bytes" in payload and payload["log_bytes"] is not None else float(payload.get("bytes", 0) or 0)
             
         if score > 2.0 and "volume" in str(cause).lower(): cause = f"Traffic Volume Spike (Port {real_dport})"
@@ -1423,7 +1431,25 @@ def process_log_into_batch(raw_bytes, batch):
 
         batch.inc_threat_stat('net_sum', score)
         batch.inc_threat_stat('net_count', 1.0)
-        
+
+        # MAP ENRICHMENT: Netflow doesn't carry raw log text (no SrcIP:/DstIP: to regex-match
+        # like the syslog path), but it usually gives us clean src/dst IPs directly (host_id can
+        # also fall back to a user_id string, so validate against RE_IP before treating it as an
+        # address - get_geoip() would otherwise mock_geo() a fake location for a username). Plot
+        # the flow on the Destinations map whenever either side is a public (non-RFC1918) address.
+        src_is_ext = bool(RE_IP.fullmatch(clean_host)) and not is_rfc1918(clean_host)
+        dst_is_ext = bool(RE_IP.fullmatch(dst_ip)) and not is_rfc1918(dst_ip)
+        ext_ip = dst_ip if dst_is_ext else (clean_host if src_is_ext else None)
+        if ext_ip:
+            geo = get_geoip(ext_ip)
+            if geo:
+                geo.update({'time': timestamp_str, 'src_ip': clean_host, 'src_port': str(real_sport), 'dst_port': str(real_dport), 'protocol': protocol_label})
+                asn = get_asn(ext_ip)
+                if asn: geo.update(asn)
+                batch.add_destination(geo)
+                if geo.get('country'):
+                    batch.add_country_stat(geo['country'])
+
         # Add to Global Anomaly Trend
         batch.anomaly_sum += score
         batch.anomaly_count += 1
@@ -1522,13 +1548,6 @@ def process_log_into_batch(raw_bytes, batch):
         src, dst = src_match.group(1), dst_match.group(1)
         ltype = "block" if any(k in lower_msg for k in ["deny", "denied", "block"]) else "allow"
         batch.update_topo_link(src, dst, ltype)
-        
-        def is_rfc1918(ip):
-            if ip.startswith("10.") or ip.startswith("192.168."): return True
-            if ip.startswith("172."):
-                parts = ip.split(".")
-                if len(parts) > 1 and 16 <= int(parts[1]) <= 31: return True
-            return False
 
         src_is_ext, dst_is_ext = not is_rfc1918(src), not is_rfc1918(dst)
         ext_ip = src if src_is_ext else (dst if dst_is_ext else None)
@@ -1547,15 +1566,17 @@ def process_log_into_batch(raw_bytes, batch):
             dg = get_geoip(dst)
             if dg:
                 # Try to extract ports if available
-                src_port, dst_port = "0", "0"
+                src_port, dst_port, msg_protocol = "0", "0", None
                 try:
                     sp_m = re.search(r"(?:SrcPort|sport)\s*[:=]\s*(\d+)", raw_msg, re.I)
                     dp_m = re.search(r"(?:DstPort|dport)\s*[:=]\s*(\d+)", raw_msg, re.I)
+                    proto_m = re.search(r"\b(TCP|UDP|ICMP)\b", raw_msg, re.I)
                     if sp_m: src_port = sp_m.group(1)
                     if dp_m: dst_port = dp_m.group(1)
+                    if proto_m: msg_protocol = proto_m.group(1).upper()
                 except: pass
-                
-                dg.update({'time': timestamp_str, 'src_ip': src, 'src_port': src_port, 'dst_port': dst_port})
+
+                dg.update({'time': timestamp_str, 'src_ip': src, 'src_port': src_port, 'dst_port': dst_port, 'protocol': msg_protocol})
                 asn = get_asn(dst)
                 if asn: dg.update(asn)
                 batch.add_destination(dg)

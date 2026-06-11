@@ -1255,6 +1255,15 @@ async def get_estate_stats():
     }
 
 
+_ILLEGAL_CHARS_RE = re.compile(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]')
+
+def _xlsx_str(v) -> str | None:
+    """Strip XML-illegal control characters from a string before writing to xlsx."""
+    if v is None:
+        return None
+    return _ILLEGAL_CHARS_RE.sub('', str(v))
+
+
 def _build_excel(rows: list) -> bytes:
     from io import BytesIO
     import openpyxl
@@ -1279,14 +1288,14 @@ def _build_excel(rows: list) -> bytes:
     ws.row_dimensions[1].height = 20
 
     for i, row in enumerate(rows, 2):
-        ws.cell(row=i, column=1, value=row.get("tenant_name"))
-        ws.cell(row=i, column=2, value=row.get("resource_name"))
-        ws.cell(row=i, column=3, value=row.get("pon"))
-        ws.cell(row=i, column=4, value=row.get("platform_name"))
-        ws.cell(row=i, column=5, value=row.get("device_type"))
-        ws.cell(row=i, column=6, value=row.get("current_firmware"))
+        ws.cell(row=i, column=1, value=_xlsx_str(row.get("tenant_name")))
+        ws.cell(row=i, column=2, value=_xlsx_str(row.get("resource_name")))
+        ws.cell(row=i, column=3, value=_xlsx_str(row.get("pon")))
+        ws.cell(row=i, column=4, value=_xlsx_str(row.get("platform_name")))
+        ws.cell(row=i, column=5, value=_xlsx_str(row.get("device_type")))
+        ws.cell(row=i, column=6, value=_xlsx_str(row.get("current_firmware")))
         ws.cell(row=i, column=7, value="")
-        ws.cell(row=i, column=8, value=row.get("serial"))
+        ws.cell(row=i, column=8, value=_xlsx_str(row.get("serial")))
         score = round(row.get("cve_score") or 0.0, 1)
         sc = ws.cell(row=i, column=9, value=score)
         ws.cell(row=i, column=10, value=row.get("cve_count", 0))

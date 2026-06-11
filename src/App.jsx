@@ -23,6 +23,14 @@ const fmtSecs = (s) => {
   return sec > 0 ? `${m}m ${sec}s` : `${m}m`;
 };
 
+const StatBox = ({ label, value, sub, highlight }) => (
+  <div className="bg-gray-800 rounded-lg px-3 py-2">
+    <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">{label}</div>
+    <div className={`font-mono font-bold text-sm ${highlight ? 'text-green-400' : 'text-white'}`}>{value}</div>
+    {sub && <div className="text-[10px] text-gray-500 mt-0.5">{sub}</div>}
+  </div>
+);
+
 const GlobalScanPanel = ({ apiBase }) => {
   const [open, setOpen] = useState(false);
   const [scanState, setScanState] = useState(null);
@@ -37,16 +45,12 @@ const GlobalScanPanel = ({ apiBase }) => {
       try {
         const msg = JSON.parse(evt.data);
         if (msg.state) setScanState(msg.state);
-        if (msg.type === 'complete') {
-          es.close();
-          esRef.current = null;
-        }
+        if (msg.type === 'complete') { es.close(); esRef.current = null; }
       } catch {}
     };
     es.onerror = () => { es.close(); esRef.current = null; };
   }, [apiBase]);
 
-  // Fetch initial status on mount
   useEffect(() => {
     fetch(`${apiBase}/api/scan/global/status`)
       .then(r => r.ok ? r.json() : null)
@@ -54,9 +58,11 @@ const GlobalScanPanel = ({ apiBase }) => {
       .catch(() => {});
   }, [apiBase]);
 
-  // Open SSE while scan is running
   useEffect(() => {
-    if (scanState?.status === 'running' && !esRef.current) connectSse();
+    if (scanState?.status === 'running' && !esRef.current) {
+      connectSse();
+      setOpen(true);
+    }
   }, [scanState?.status, connectSse]);
 
   useEffect(() => () => esRef.current?.close(), []);
@@ -77,56 +83,92 @@ const GlobalScanPanel = ({ apiBase }) => {
   const status = scanState?.status || 'idle';
   const isRunning = status === 'running';
   const isDone = status === 'complete' || status === 'error';
+  const hasState = isDone || isRunning;
 
-  const btnLabel = starting ? 'Starting…' : isRunning ? 'Scanning…' : 'Scan All Tenants';
-  const btnIcon = (starting || isRunning)
-    ? <Loader2 size={13} className="animate-spin" />
-    : <Globe size={13} />;
+  const nvdPct = scanState?.nvd_total > 0
+    ? Math.round((scanState.nvd_queried / scanState.nvd_total) * 100)
+    : 0;
+  const savePct = scanState?.total_tenants > 0
+    ? Math.round((scanState.tenants_saved / scanState.total_tenants) * 100)
+    : 0;
 
   return (
     <div className="relative">
       <button
-        onClick={() => isDone || isRunning ? setOpen(o => !o) : startScan()}
-        disabled={starting || isRunning}
-        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-60 disabled:cursor-not-allowed bg-gray-800 border-gray-700 text-gray-300 hover:bg-green-900/30 hover:border-green-500/40 hover:text-green-400"
+        onClick={() => hasState ? setOpen(o => !o) : startScan()}
+        disabled={starting}
+        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-60 bg-gray-800 border-gray-700 text-gray-300 hover:bg-green-900/30 hover:border-green-500/40 hover:text-green-400"
       >
-        {btnIcon}
-        {btnLabel}
-        {(isDone || isRunning) && <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />}
+        {starting ? <Loader2 size={13} className="animate-spin" />
+          : isRunning ? <Loader2 size={13} className="animate-spin text-green-400" />
+          : <Globe size={13} />}
+        {starting ? 'Starting…' : isRunning ? 'Scanning…' : 'Scan All Tenants'}
+        {hasState && <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />}
       </button>
 
       {open && scanState && (
-        <div className="absolute right-0 top-full mt-2 w-[420px] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-50 p-4 text-xs">
+        <div className="absolute right-0 top-full mt-2 w-[500px] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-50 p-4 text-xs max-h-[85vh] overflow-y-auto">
+          {/* Header */}
           <div className="flex items-center justify-between mb-3">
-            <span className="font-bold text-white uppercase tracking-widest text-[10px]">Global Scan</span>
+            <span className="font-bold text-white uppercase tracking-widest text-[10px]">Global Scan Progress</span>
             <div className="flex items-center gap-2">
-              {isRunning && <span className="flex items-center gap-1 text-green-400"><Loader2 size={11} className="animate-spin" /> Running</span>}
+              {isRunning && <span className="flex items-center gap-1 text-green-400 animate-pulse"><Loader2 size={11} className="animate-spin" /> Running</span>}
               {status === 'complete' && <span className="flex items-center gap-1 text-green-400"><CheckCircle size={11} /> Complete</span>}
               {status === 'error' && <span className="text-red-400">Error</span>}
-              <button onClick={() => setOpen(false)} className="text-gray-500 hover:text-white"><X size={13} /></button>
+              <button onClick={() => setOpen(false)} className="text-gray-500 hover:text-white ml-1"><X size={13} /></button>
             </div>
           </div>
 
-          {/* Phase */}
-          <p className="text-gray-400 mb-3 italic">{scanState.phase || 'Initializing…'}</p>
+          {/* Current phase */}
+          <p className="text-green-400/80 italic mb-4 text-[11px]">{scanState.phase || 'Initializing…'}</p>
 
-          {/* Stats grid */}
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            {[
-              ['Devices fetched',   `${scanState.devices_fetched?.toLocaleString() || 0} / ${scanState.total_devices?.toLocaleString() || '?'}`],
-              ['Unique combos',     (scanState.unique_combos || 0).toLocaleString()],
-              ['NVD queries',       `${scanState.nvd_queried || 0} / ${scanState.nvd_total || 0}  (${scanState.nvd_cached || 0} cached)`],
-              ['Tenants saved',     (scanState.tenants_saved || 0).toLocaleString()],
-            ].map(([label, val]) => (
-              <div key={label} className="bg-gray-800 rounded-lg px-3 py-2">
-                <div className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</div>
-                <div className="text-white font-mono font-bold mt-0.5">{val}</div>
-              </div>
-            ))}
+          {/* ── Inventory ── */}
+          <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">Inventory</div>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            <StatBox label="Total devices" value={(scanState.total_devices || scanState.devices_fetched || 0).toLocaleString()} />
+            <StatBox label="Physical" value={(scanState.physical_devices || 0).toLocaleString()} />
+            <StatBox label="Virtual machines" value={(scanState.virtual_machines || 0).toLocaleString()} />
           </div>
 
-          {/* Elapsed + phase timings */}
-          <div className="border-t border-gray-800 pt-3 flex flex-wrap gap-x-4 gap-y-1 text-gray-500">
+          {/* ── Platform breakdown ── */}
+          <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">Platform Analysis</div>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            <StatBox label="OS platforms" value={(scanState.unique_platforms || 0).toLocaleString()} sub="distinct OS types" />
+            <StatBox label="Version combos" value={(scanState.unique_combos || 0).toLocaleString()} sub="unique NVD queries" />
+            <StatBox label="No platform data" value={(scanState.no_platform_count || 0).toLocaleString()} sub="skipped" />
+          </div>
+
+          {/* ── NVD queries ── */}
+          <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">NVD Queries</div>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <StatBox label="Completed" value={(scanState.nvd_queried || 0).toLocaleString()} highlight={scanState.nvd_queried > 0} />
+            <StatBox label="Waiting" value={Math.max(0, (scanState.nvd_total || 0) - (scanState.nvd_queried || 0)).toLocaleString()} />
+            <StatBox label="Cache hits" value={(scanState.nvd_cached || 0).toLocaleString()} sub="no API call needed" />
+          </div>
+          {scanState.nvd_total > 0 && (
+            <div className="mb-4">
+              <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+                <span>NVD progress</span><span>{nvdPct}%</span>
+              </div>
+              <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+                <div className="bg-green-600 h-full transition-all duration-500" style={{ width: `${nvdPct}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* ── Results ── */}
+          <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">Results</div>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            <StatBox label="Devices with CVEs" value={(scanState.devices_with_cves || 0).toLocaleString()} highlight={scanState.devices_with_cves > 0} />
+            <StatBox
+              label="Tenants saved"
+              value={`${(scanState.tenants_saved || 0).toLocaleString()} / ${(scanState.total_tenants || 0).toLocaleString()}`}
+              sub={scanState.total_tenants > 0 ? `${savePct}%` : ''}
+            />
+          </div>
+
+          {/* ── Timing ── */}
+          <div className="border-t border-gray-800 pt-3 flex flex-wrap gap-x-5 gap-y-1 text-gray-500 text-[11px]">
             <span>Elapsed: <span className="text-gray-300 font-mono">{fmtSecs(scanState.elapsed_seconds)}</span></span>
             {scanState.phase_timings?.inventory_seconds != null && (
               <span>Inventory: <span className="text-gray-300 font-mono">{fmtSecs(scanState.phase_timings.inventory_seconds)}</span></span>
@@ -139,16 +181,13 @@ const GlobalScanPanel = ({ apiBase }) => {
             )}
           </div>
 
-          {scanState.error && (
-            <p className="mt-2 text-red-400 break-words">{scanState.error}</p>
-          )}
+          {scanState.error && <p className="mt-2 text-red-400 break-words">{scanState.error}</p>}
 
-          {/* Re-run button once done */}
           {isDone && (
             <button
               onClick={startScan}
               disabled={starting}
-              className="mt-3 w-full py-1.5 rounded-lg border border-gray-700 text-gray-400 hover:border-green-500/40 hover:text-green-400 transition-colors text-xs font-semibold"
+              className="mt-4 w-full py-1.5 rounded-lg border border-gray-700 text-gray-400 hover:border-green-500/40 hover:text-green-400 transition-colors text-xs font-semibold"
             >
               Run Again
             </button>

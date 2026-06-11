@@ -328,8 +328,56 @@ async def generate_estate_summary(tenant_id: str, tenant_name: str, devices: lis
 
 
 # ---------------------------------------------------------------------------
-# DEVICE SCANNING
+# DEVICE SCANNING — shared helpers
 # ---------------------------------------------------------------------------
+
+def _build_nvd_query(os_name: str, os_version: str) -> str | None:
+    """Return the NVD keyword search string for a platform/version combo, or None if insufficient data."""
+    if not os_name or not os_version:
+        return None
+    version_clean = re.sub(r'^v', '', str(os_version))
+    if "forti" in os_name.lower():
+        m = re.search(r'(\d+\.\d+\.\d+)', version_clean)
+        if m:
+            version_clean = m.group(1)
+    gvm = re.search(r'(\d+\.\d+(?:\.\d+)?(?:[a-zA-Z0-9.\-x]*))', os_name, re.IGNORECASE)
+    if gvm and version_clean:
+        gv = gvm.group(1)
+        npm = re.match(r'(\d+\.\d+)', gv)
+        if npm and npm.group(1) in version_clean:
+            cleaned = re.sub(r'\s+', ' ', re.sub(r'\s*\b' + re.escape(gv) + r'\b', '', os_name, flags=re.IGNORECASE)).strip()
+            return f"{cleaned} {version_clean}"
+        return f"{os_name} {version_clean}"
+    return f"{os_name} {version_clean}" if version_clean else os_name
+
+
+def _parse_cve_response(cves_data: dict) -> tuple[list, float]:
+    """Parse an NVD CVE response into (cve_list, highest_score)."""
+    device_cves, highest = [], 0.0
+    for item in cves_data.get("vulnerabilities", []):
+        cve = item.get("cve", {})
+        metrics = cve.get("metrics", {})
+        metric, cvss = None, {}
+        for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+            if metrics.get(key):
+                metric = metrics[key][0]
+                cvss = metric.get("cvssData", {})
+                break
+        if not cvss:
+            continue
+        score = cvss.get("baseScore", 0)
+        if score > highest:
+            highest = score
+        descs = cve.get("descriptions", [])
+        desc = next((d["value"] for d in descs if d.get("lang") == "en"), None) or (descs[0].get("value") if descs else "No description available.")
+        device_cves.append({
+            "id": cve.get("id"),
+            "description": desc or "No description available.",
+            "score": score,
+            "severity": cvss.get("baseSeverity") or (metric.get("baseSeverity") if metric else "UNKNOWN"),
+        })
+    return device_cves, highest
+
 
 async def process_netbox_resource(resource, resource_type, client, broker, update_callback=None):
     resource_name = resource.get("name") or f"Resource-{resource.get('id')}"
@@ -362,31 +410,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
     print(f"      🔎 Scanning {resource_name}...")
 
-    version_clean = re.sub(r'^v', '', str(os_version))
-    if "forti" in os_name.lower():
-        match = re.search(r'(\d+\.\d+\.\d+)', version_clean)
-        if match: version_clean = match.group(1)
-
-    initial_search_query = ""
-    if version_clean:
-        generic_version_match = re.search(r'(\d+\.\d+(?:\.\d+)?(?:[a-zA-Z0-9\.\-x]*))', os_name, re.IGNORECASE)
-        if generic_version_match:
-            generic_version_in_os_name = generic_version_match.group(1)
-            numeric_prefix_match = re.match(r'(\d+\.\d+)', generic_version_in_os_name)
-            if numeric_prefix_match:
-                numeric_prefix = numeric_prefix_match.group(1)
-                if numeric_prefix in version_clean:
-                    pattern = r'\s*\b' + re.escape(generic_version_in_os_name) + r'\b'
-                    os_name_cleaned = re.sub(r'\s+', ' ', re.sub(pattern, '', os_name, flags=re.IGNORECASE)).strip()
-                    initial_search_query = f"{os_name_cleaned} {version_clean}"
-                else:
-                    initial_search_query = f"{os_name} {version_clean}"
-            else:
-                initial_search_query = f"{os_name} {version_clean}"
-        else:
-            initial_search_query = f"{os_name} {version_clean}"
-    else:
-        initial_search_query = os_name
+    initial_search_query = _build_nvd_query(os_name, os_version) or os_name
 
     final_cves_data = {"vulnerabilities": []}
     current_search_query = initial_search_query
@@ -421,40 +445,10 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
     except Exception as e:
         print(f"      ❌ NVD search error for '{current_search_query}': {e}")
 
-    raw_vulnerabilities = final_cves_data.get("vulnerabilities", [])
-    print(f"      📊 {resource_name}: {len(raw_vulnerabilities)} raw CVEs for '{current_search_query}'")
+    print(f"      📊 {resource_name}: {len(final_cves_data.get('vulnerabilities', []))} raw CVEs for '{current_search_query}'")
 
     try:
-        device_cves = []
-        highest = 0.0
-        for item in raw_vulnerabilities:
-            cve = item.get("cve", {})
-            metrics_data = cve.get("metrics", {})
-            metric = None
-            cvss_data = {}
-            if metrics_data.get("cvssMetricV31"):
-                metric = metrics_data["cvssMetricV31"][0]
-                cvss_data = metric.get("cvssData", {})
-            elif metrics_data.get("cvssMetricV30"):
-                metric = metrics_data["cvssMetricV30"][0]
-                cvss_data = metric.get("cvssData", {})
-            elif metrics_data.get("cvssMetricV2"):
-                metric = metrics_data["cvssMetricV2"][0]
-                cvss_data = metric.get("cvssData", {})
-
-            if cvss_data:
-                score = cvss_data.get("baseScore", 0)
-                if score > highest: highest = score
-                descriptions = cve.get("descriptions", [])
-                description = next((d["value"] for d in descriptions if d.get("lang") == "en"), None)
-                if not description and descriptions:
-                    description = descriptions[0].get("value", "No description available.")
-                device_cves.append({
-                    "id": cve.get("id"),
-                    "description": description or "No description available.",
-                    "score": score,
-                    "severity": cvss_data.get("baseSeverity") or (metric.get("baseSeverity") if metric else "UNKNOWN")
-                })
+        device_cves, highest = _parse_cve_response(final_cves_data)
 
         partial_res = {
             "resource_name": resource_name,
@@ -633,6 +627,240 @@ async def run_tenant_scan(tenant_id: str, tenant_name: str):
 
 
 # ---------------------------------------------------------------------------
+# GLOBAL SCAN (all tenants, deduplicated NVD queries)
+# ---------------------------------------------------------------------------
+
+_global_scan_state: dict = {
+    "status": "idle",      # idle | running | complete | error
+    "phase": "",
+    "devices_fetched": 0,
+    "total_devices": 0,
+    "unique_combos": 0,
+    "nvd_queried": 0,
+    "nvd_cached": 0,
+    "nvd_total": 0,
+    "tenants_saved": 0,
+    "started_at": None,
+    "completed_at": None,
+    "elapsed_seconds": None,
+    "phase_timings": {},
+    "error": None,
+}
+_global_scan_task: asyncio.Task | None = None
+_global_sse_subscribers: list[asyncio.Queue] = []
+
+
+async def _push_global(msg: dict):
+    dead = []
+    for q in _global_sse_subscribers:
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            dead.append(q)
+    for q in dead:
+        _global_sse_subscribers.remove(q)
+
+
+async def run_global_scan():
+    """
+    Fetch all devices/VMs across every tenant, build a unique platform→query map,
+    query NVD once per combo, fan results out to devices, and save per-tenant JSON.
+    LLM per-device analysis is skipped in bulk mode (100k+ calls would be impractical).
+    """
+    global cve_cache, _global_scan_task
+    state = _global_scan_state
+    state.update({
+        "status": "running", "phase": "Fetching device inventory",
+        "devices_fetched": 0, "total_devices": 0, "unique_combos": 0,
+        "nvd_queried": 0, "nvd_cached": 0, "nvd_total": 0, "tenants_saved": 0,
+        "started_at": datetime.utcnow().isoformat(), "completed_at": None,
+        "elapsed_seconds": None, "phase_timings": {}, "error": None,
+    })
+
+    t_start = time.time()
+    phase_t = t_start
+    headers = {"Authorization": f"Token {NETBOX_TOKEN}", "Accept": "application/json"}
+
+    try:
+        async with httpx.AsyncClient(verify=False, follow_redirects=True) as client:
+
+            # ----------------------------------------------------------------
+            # Phase 1 — inventory all devices + VMs that have a tenant
+            # ----------------------------------------------------------------
+            all_devices: list[dict] = []
+            for rtype, base_url in [
+                ("device",  f"{NETBOX_URL}/api/dcim/devices/?limit=1000"),
+                ("vm",      f"{NETBOX_URL}/api/virtualization/virtual-machines/?limit=1000"),
+            ]:
+                url = base_url
+                page = 1
+                while url:
+                    try:
+                        resp = await client.get(url, headers=headers, timeout=60)
+                        resp.raise_for_status()
+                        data = resp.json()
+                        for d in data.get("results", []):
+                            d["_rtype"] = rtype
+                        all_devices.extend(data.get("results", []))
+                        state["devices_fetched"] = len(all_devices)
+                        await _push_global({"type": "progress", "state": dict(state)})
+                        url = data.get("next")
+                        page += 1
+                    except Exception as e:
+                        print(f"  ❌ Global scan page {page} ({rtype}): {e}")
+                        break
+
+            state["total_devices"] = len(all_devices)
+            state["phase_timings"]["inventory_seconds"] = round(time.time() - phase_t, 1)
+            phase_t = time.time()
+            print(f"🌍 Global scan: {len(all_devices)} devices fetched in {state['phase_timings']['inventory_seconds']}s")
+
+            # ----------------------------------------------------------------
+            # Phase 2 — build unique (query_string → device list) map
+            # ----------------------------------------------------------------
+            state["phase"] = "Building platform inventory"
+            await _push_global({"type": "progress", "state": dict(state)})
+
+            # combo_map: nvd_query → {"devices": [...raw netbox dicts...]}
+            combo_map: dict[str, list] = {}
+            no_platform: list[dict] = []
+
+            for d in all_devices:
+                rtype = d.get("_rtype", "device")
+                pinfo = d.get("platform")
+                os_name = pinfo.get("name") if pinfo else None
+                if rtype == "vm":
+                    os_version = d.get("custom_fields", {}).get("os_version")
+                else:
+                    os_version = d.get("custom_fields", {}).get("os_build")
+
+                query = _build_nvd_query(os_name, os_version)
+                if query:
+                    combo_map.setdefault(query, []).append(d)
+                else:
+                    no_platform.append(d)
+
+            state["unique_combos"] = len(combo_map)
+            state["phase_timings"]["grouping_seconds"] = round(time.time() - phase_t, 1)
+            phase_t = time.time()
+            print(f"🔑 Global scan: {len(combo_map)} unique platform/version combos, {len(no_platform)} without platform data")
+
+            # ----------------------------------------------------------------
+            # Phase 3 — deduplicated NVD queries via broker
+            # ----------------------------------------------------------------
+            state["phase"] = f"Querying NVD for {len(combo_map)} unique platform combos"
+            state["nvd_total"] = len(combo_map)
+            await _push_global({"type": "progress", "state": dict(state)})
+
+            broker = VulnerabilityRequestBroker(cve_cache)
+            broker_task = asyncio.create_task(broker.worker(client))
+            nvd_results: dict[str, dict] = {}
+
+            async def fetch_one(query: str):
+                result = await broker.request_vulnerabilities(query)
+                nvd_results[query] = result
+                was_cached = query in cve_cache or query in broker.processed_requests
+                state["nvd_queried"] += 1
+                if was_cached:
+                    state["nvd_cached"] += 1
+                await _push_global({"type": "progress", "state": dict(state)})
+
+            # Fan out all queries concurrently — broker serialises the actual API calls
+            await asyncio.gather(*[fetch_one(q) for q in combo_map])
+            await broker.queue.join()
+            broker_task.cancel()
+
+            state["phase_timings"]["nvd_seconds"] = round(time.time() - phase_t, 1)
+            phase_t = time.time()
+            print(f"📡 Global scan: NVD done in {state['phase_timings']['nvd_seconds']}s ({state['nvd_cached']} cache hits)")
+
+            # ----------------------------------------------------------------
+            # Phase 4 — fan out CVE results → group by tenant → save
+            # ----------------------------------------------------------------
+            state["phase"] = "Saving results per tenant"
+            await _push_global({"type": "progress", "state": dict(state)})
+
+            tenant_devices: dict[str, list] = {}
+            tenant_names: dict[str, str] = {}
+            scan_ts = datetime.utcnow().isoformat()
+
+            def _make_record(d: dict, device_cves: list, highest: float) -> dict:
+                rtype = d.get("_rtype", "device")
+                pinfo = d.get("platform")
+                os_name = pinfo.get("name") if pinfo else None
+                if rtype == "vm":
+                    model = (d.get("cluster") or {}).get("name") or "Unknown Cluster"
+                    os_version = d.get("custom_fields", {}).get("os_version")
+                else:
+                    model = (d.get("device_type") or {}).get("model") or "Unknown Model"
+                    os_version = d.get("custom_fields", {}).get("os_build")
+                llm = ("Vulnerabilities found — open this tenant for AI analysis."
+                       if device_cves else "No vulnerabilities detected.")
+                return {
+                    "resource_name": d.get("name") or f"Resource-{d.get('id')}",
+                    "os": f"{os_name or 'Unknown'} {os_version or ''}".strip(),
+                    "resource_type": model,
+                    "resource_category": rtype,
+                    "highest_severity_score": highest,
+                    "cves": device_cves,
+                    "is_vulnerable": len(device_cves) > 0,
+                    "llm_analysis": llm,
+                }
+
+            for query, devs in combo_map.items():
+                cves_data = nvd_results.get(query, {"vulnerabilities": []})
+                device_cves, highest = _parse_cve_response(cves_data)
+                for d in devs:
+                    tenant = d.get("tenant") or {}
+                    tid = str(tenant.get("id", ""))
+                    tname = tenant.get("name", "Unknown")
+                    if not tid:
+                        continue
+                    tenant_names[tid] = tname
+                    tenant_devices.setdefault(tid, []).append(_make_record(d, device_cves, highest))
+
+            for d in no_platform:
+                tenant = d.get("tenant") or {}
+                tid = str(tenant.get("id", ""))
+                tname = tenant.get("name", "Unknown")
+                if not tid:
+                    continue
+                tenant_names[tid] = tname
+                tenant_devices.setdefault(tid, []).append(_make_record(d, [], 0.0))
+
+            for tid, devs in tenant_devices.items():
+                devs.sort(key=lambda x: x["highest_severity_score"], reverse=True)
+                save_tenant_results(tid, {
+                    "tenant_id": tid,
+                    "tenant_name": tenant_names[tid],
+                    "scanned_at": scan_ts,
+                    "devices": devs,
+                    "bulk_scan": True,
+                })
+                state["tenants_saved"] += 1
+
+            state["phase_timings"]["save_seconds"] = round(time.time() - phase_t, 1)
+
+        elapsed = round(time.time() - t_start, 1)
+        state.update({
+            "status": "complete",
+            "phase": "Complete",
+            "elapsed_seconds": elapsed,
+            "completed_at": datetime.utcnow().isoformat(),
+        })
+        print(f"✅ Global scan complete in {elapsed}s — {state['tenants_saved']} tenants, {state['total_devices']} devices, {state['unique_combos']} unique combos")
+
+    except Exception as e:
+        elapsed = round(time.time() - t_start, 1)
+        state.update({"status": "error", "error": str(e), "elapsed_seconds": elapsed})
+        print(f"❌ Global scan failed after {elapsed}s: {e}")
+        traceback.print_exc()
+
+    await _push_global({"type": "complete", "state": dict(state)})
+    _global_scan_task = None
+
+
+# ---------------------------------------------------------------------------
 # API ENDPOINTS
 # ---------------------------------------------------------------------------
 
@@ -770,6 +998,63 @@ async def recent_tenants():
 async def get_tenants(q: str = "", limit: int = 50, devices_only: bool = False):
     """Legacy / compat endpoint. Delegates to search."""
     return await _netbox_tenant_search(q.strip(), min(limit, 200), devices_only=devices_only)
+
+
+@app.post("/api/scan/global")
+async def trigger_global_scan():
+    """Start a global scan of all tenants. Ignored if one is already running."""
+    global _global_scan_task
+    if _global_scan_task and not _global_scan_task.done():
+        return {"status": "running", "message": "Global scan already in progress."}
+    _global_scan_task = asyncio.create_task(run_global_scan())
+    return {"status": "started", "message": "Global scan started."}
+
+
+@app.get("/api/scan/global/status")
+async def get_global_scan_status():
+    """Return current global scan state including phase timings and elapsed time."""
+    state = dict(_global_scan_state)
+    if state["status"] == "running" and state["started_at"]:
+        state["elapsed_seconds"] = round(time.time() - datetime.fromisoformat(state["started_at"]).timestamp(), 1)
+    return state
+
+
+@app.get("/api/scan/global/stream")
+async def stream_global_scan():
+    """SSE stream of global scan progress events."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    _global_sse_subscribers.append(q)
+
+    async def event_gen():
+        initial = dict(_global_scan_state)
+        if initial.get("status") == "running" and initial.get("started_at"):
+            initial["elapsed_seconds"] = round(time.time() - datetime.fromisoformat(initial["started_at"]).timestamp(), 1)
+        yield f"data: {json_dumps({'type': 'progress', 'state': initial})}\n\n"
+
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=30.0)
+                    yield f"data: {json_dumps(msg)}\n\n"
+                    q.task_done()
+                    if msg.get("type") == "complete":
+                        break
+                except asyncio.TimeoutError:
+                    state = dict(_global_scan_state)
+                    if state.get("status") == "running" and state.get("started_at"):
+                        state["elapsed_seconds"] = round(time.time() - datetime.fromisoformat(state["started_at"]).timestamp(), 1)
+                    yield f"data: {json_dumps({'type': 'progress', 'state': state})}\n\n"
+        finally:
+            try:
+                _global_sse_subscribers.remove(q)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/scan/{tenant_id}")

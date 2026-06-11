@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Clock } from 'lucide-react';
+import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Clock, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -451,6 +451,16 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
             <RefreshCw size={12} className={isScanning ? 'animate-spin' : ''} />
             Rescan
           </button>
+          {devices.length > 0 && !isScanning && (
+            <button
+              onClick={() => window.open(`${apiBase}/api/export/tenant/${tenantId}`, '_blank')}
+              title="Export to Excel"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors bg-gray-800 border-gray-700 text-gray-300 hover:bg-green-900/40 hover:border-green-500/50 hover:text-green-400"
+            >
+              <Download size={12} />
+              Export .xlsx
+            </button>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
           <div className="relative flex-grow md:flex-grow-0">

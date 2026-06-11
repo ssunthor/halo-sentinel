@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp } from 'lucide-react';
 import NetboxVulnerabilities from './components/NetboxVulnerabilities';
+import Leaderboard from './components/Leaderboard';
 
 const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
 
@@ -408,17 +409,7 @@ export default function App() {
       {/* MAIN CONTENT */}
       <main className="max-w-screen-2xl mx-auto">
         {!selectedTenant ? (
-          <div className="flex flex-col items-center justify-center min-h-[70vh] gap-6 px-4">
-            <div className="w-16 h-16 rounded-2xl bg-green-500/10 border border-green-500/20 flex items-center justify-center">
-              <Shield size={32} className="text-green-500" />
-            </div>
-            <div className="text-center">
-              <h1 className="text-2xl font-bold text-white mb-2">Defense Halo Customer CVE Analyzer</h1>
-              <p className="text-gray-400 text-sm max-w-md">
-                Search for a tenant in the box above to view their vulnerability scan results or initiate a new scan.
-              </p>
-            </div>
-          </div>
+          <Leaderboard apiBase={apiBase} onSelectTenant={setSelectedTenant} />
         ) : (
           <NetboxVulnerabilities
             apiBase={apiBase}

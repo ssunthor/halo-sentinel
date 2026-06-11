@@ -1,397 +1,627 @@
-import React, { useState, useEffect } from 'react';
-import { Server, X, Router, Network, Shield, HardDrive } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Clock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-const getSeverityColor = (score) => {
-    if (!score || score === 0) return 'border-green-500';
-    if (score >= 7) return 'border-red-500';
-    if (score >= 4) return 'border-orange-500';
-    return 'border-yellow-500';
+// ---------------------------------------------------------------------------
+// SEVERITY HELPERS
+// ---------------------------------------------------------------------------
+const getSeverityBorderColor = (score) => {
+  if (!score || score === 0) return 'border-green-500';
+  if (score >= 7) return 'border-red-500';
+  if (score >= 4) return 'border-orange-500';
+  return 'border-yellow-500';
 };
 
 const getSeverityTextClass = (score) => {
-    if (!score || score === 0) return 'text-green-500';
-    if (score >= 7) return 'text-red-500';
-    if (score >= 4) return 'text-orange-500';
-    return 'text-yellow-500';
+  if (!score || score === 0) return 'text-green-500';
+  if (score >= 7) return 'text-red-500';
+  if (score >= 4) return 'text-orange-500';
+  return 'text-yellow-500';
+};
+
+const getRiskPostureStyle = (posture) => {
+  if (!posture) return { border: 'border-gray-700', text: 'text-gray-400', bg: 'bg-gray-900/50' };
+  const p = posture.toLowerCase();
+  if (p === 'critical') return { border: 'border-red-500/50', text: 'text-red-400', bg: 'bg-red-900/10' };
+  if (p === 'high')     return { border: 'border-orange-500/50', text: 'text-orange-400', bg: 'bg-orange-900/10' };
+  if (p === 'medium')   return { border: 'border-yellow-500/50', text: 'text-yellow-400', bg: 'bg-yellow-900/10' };
+  if (p === 'low')      return { border: 'border-blue-500/50', text: 'text-blue-400', bg: 'bg-blue-900/10' };
+  return { border: 'border-green-500/50', text: 'text-green-400', bg: 'bg-green-900/10' };
 };
 
 const getDeviceIcon = (deviceType) => {
-    const type = (deviceType || '').toLowerCase();
-    if (type.includes('virtual-machine') || type.includes('vm')) return <Server className="text-blue-400" />; // Using Server icon for VMs, with a different color
-    if (type.includes('router')) return <Router className="text-gray-400" />;
-    if (type.includes('switch')) return <Network className="text-gray-400" />;
-    if (type.includes('firewall')) return <Shield className="text-gray-400" />;
-    if (type.includes('server')) return <Server className="text-gray-400" />;
-    return <HardDrive className="text-gray-400" />;
+  const type = (deviceType || '').toLowerCase();
+  if (type.includes('virtual-machine') || type.includes('vm') || type.includes('cluster')) return <Server className="text-blue-400" />;
+  if (type.includes('router')) return <Router className="text-gray-400" />;
+  if (type.includes('switch')) return <Network className="text-gray-400" />;
+  if (type.includes('firewall')) return <Shield className="text-gray-400" />;
+  if (type.includes('server')) return <Server className="text-gray-400" />;
+  return <HardDrive className="text-gray-400" />;
 };
 
-const NetboxVulnerabilities = () => {
-    const [devices, setDevices] = useState([]);
-    const [virtualMachines, setVirtualMachines] = useState([]); // New state for virtual machines
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [selectedDevice, setSelectedDevice] = useState(null);
-    const [overallSummary, setOverallSummary] = useState("");
-    const [backendReady, setBackendReady] = useState(false);
-    const [scanInProgress, setScanInProgress] = useState(false);
-    const [showUnknown, setShowUnknown] = useState(true);
-    const [showVirtualMachines, setShowVirtualMachines] = useState(false);
+const TrendIcon = ({ trend }) => {
+  if (!trend) return null;
+  if (trend === 'improving') return <TrendingDown size={14} className="text-green-400" />;
+  if (trend === 'declining') return <TrendingUp size={14} className="text-red-400" />;
+  return <Minus size={14} className="text-gray-400" />;
+};
 
-    // Pagination and Search State
-    const [searchTerm, setSearchTerm] = useState('');
-    const [currentPage, setCurrentPage] = useState(1);
-    const [itemsPerPage, setItemsPerPage] = useState(25);
+const formatDate = (iso) => {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString();
+};
 
-    const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://10.250.133.153:15174';
+// ---------------------------------------------------------------------------
+// ESTATE SUMMARY PANEL
+// ---------------------------------------------------------------------------
+const EstateSummaryPanel = ({ summary, tenantName }) => {
+  const [open, setOpen] = useState(true);
+  if (!summary) return null;
 
-    useEffect(() => {
-        const checkBackendStatus = async () => {
-            try {
-                const response = await fetch(`${apiBase}/status`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                if (data.initial_scan_complete) {
-                    setBackendReady(true);
-                }
-                setScanInProgress(data.scan_in_progress);
-            } catch (e) {
-                console.error("Error checking backend status:", e);
-            }
-        };
+  const style = getRiskPostureStyle(summary.risk_posture);
 
-        const interval = setInterval(() => {
-            checkBackendStatus();
-        }, 2000);
+  return (
+    <div className={`mb-4 rounded-xl border ${style.border} ${style.bg} overflow-hidden`}>
+      {/* Header (always visible) */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-5 py-4 hover:bg-white/5 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <Shield size={16} className={style.text} />
+          <div className="text-left">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-white">Estate Risk Assessment</span>
+              <span className={`text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded ${style.text} border ${style.border}`}>
+                {summary.risk_posture || 'Unknown'}
+              </span>
+              {summary.trend && summary.trend !== 'new_scan' && (
+                <span className="flex items-center gap-1 text-xs text-gray-400">
+                  <TrendIcon trend={summary.trend} />
+                  {summary.trend}
+                </span>
+              )}
+            </div>
+            {summary.risk_summary && (
+              <p className="text-xs text-gray-400 mt-0.5 max-w-2xl text-left">{summary.risk_summary}</p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <span className="text-xs text-gray-600 hidden md:block">
+            {summary.vulnerable_device_count} / {summary.total_device_count} vulnerable
+          </span>
+          {open ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+        </div>
+      </button>
 
-        return () => clearInterval(interval);
-    }, [apiBase]);
+      {/* Expanded body */}
+      {open && (
+        <div className="px-5 pb-5 border-t border-white/5 space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
+            {/* Stat cards */}
+            <div className="bg-black/30 rounded-lg p-3 border border-gray-800">
+              <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total Scanned</div>
+              <div className="text-2xl font-black text-white">{summary.total_device_count ?? '—'}</div>
+            </div>
+            <div className="bg-black/30 rounded-lg p-3 border border-gray-800">
+              <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Vulnerable</div>
+              <div className={`text-2xl font-black ${style.text}`}>{summary.vulnerable_device_count ?? '—'}</div>
+            </div>
+            <div className="bg-black/30 rounded-lg p-3 border border-gray-800">
+              <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Max CVE Score</div>
+              <div className={`text-2xl font-black ${getSeverityTextClass(summary.max_severity_score)}`}>
+                {summary.max_severity_score != null ? summary.max_severity_score.toFixed(1) : '—'}
+              </div>
+            </div>
+          </div>
 
-    useEffect(() => {
-        const fetchNetboxData = async () => {
-            if (!backendReady && !scanInProgress) return;
-            // Only set loading on first fetch
-            if (devices.length === 0) setLoading(true);
-            setError(null); // Clear previous errors
+          {/* Top CVEs */}
+          {summary.top_cves && summary.top_cves.length > 0 && (
+            <div>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Top CVEs Across Estate</h4>
+              <div className="space-y-1.5">
+                {summary.top_cves.map((cve, i) => (
+                  <div key={i} className="flex items-center gap-3 bg-black/20 rounded-lg px-3 py-2 border border-gray-800">
+                    <a
+                      href={`https://nvd.nist.gov/vuln/detail/${cve.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:underline text-xs font-bold font-mono flex-shrink-0 w-32"
+                    >
+                      {cve.id}
+                    </a>
+                    <span className={`text-xs font-bold flex-shrink-0 ${getSeverityTextClass(cve.score)}`}>
+                      {cve.score?.toFixed(1)} {cve.severity}
+                    </span>
+                    <span className="text-xs text-gray-500 flex-shrink-0">
+                      {cve.affected_count != null ? `${cve.affected_count} device(s)` : ''}
+                    </span>
+                    {cve.action && (
+                      <span className="text-xs text-gray-400 truncate">{cve.action}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-            try {
-                const deviceResponse = await fetch(`${apiBase}/netbox/vulnerabilities`);
-                if (!deviceResponse.ok) {
-                    throw new Error(`HTTP error! status: ${deviceResponse.status} for devices`);
-                }
-                const deviceData = await deviceResponse.json();
-                
-                let vmData = [];
-                if (showVirtualMachines) {
-                    // Assuming a new endpoint for virtual machines
-                    const vmResponse = await fetch(`${apiBase}/netbox/virtual-machines?status=active&tenant_id=1`);
-                    if (!vmResponse.ok) {
-                        throw new Error(`HTTP error! status: ${vmResponse.status} for virtual machines`);
-                    }
-                    vmData = await vmResponse.json();
-                }
+          {/* Recommendations */}
+          {summary.recommendations && summary.recommendations.length > 0 && (
+            <div>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Prioritized Recommendations</h4>
+              <ol className="space-y-1.5">
+                {summary.recommendations.map((rec, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-green-500/10 border border-green-500/30 text-green-400 text-xs flex items-center justify-center font-bold mt-0.5">
+                      {i + 1}
+                    </span>
+                    {rec}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
 
-                // Combine devices and virtual machines
-                const combinedData = [...deviceData, ...vmData];
-                setDevices(combinedData); // Update devices state with combined data
-                if (currentPage === 1 && devices.length === 0) setCurrentPage(1);
+          {/* Trend detail */}
+          {summary.trend_detail && summary.trend !== 'new_scan' && (
+            <div className="flex items-start gap-2 bg-black/20 rounded-lg px-3 py-2 border border-gray-800">
+              <TrendIcon trend={summary.trend} />
+              <p className="text-xs text-gray-400">{summary.trend_detail}</p>
+            </div>
+          )}
 
-            } catch (e) {
-                setError(e.message);
-            } finally {
-                setLoading(false);
-            }
-        };
+          <p className="text-xs text-gray-700">
+            Generated {formatDate(summary.generated_at)}
+            {summary.previous_generated_at && ` · Previous: ${formatDate(summary.previous_generated_at)}`}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};
 
-        fetchNetboxData();
+// ---------------------------------------------------------------------------
+// MAIN COMPONENT
+// ---------------------------------------------------------------------------
+const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
+  const [devices, setDevices] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [scanStatus, setScanStatus] = useState('idle'); // idle | running | complete | refreshing
+  const [scanned, setScanned] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [staleNotice, setStaleNotice] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+  const [showUnknown, setShowUnknown] = useState(true);
+  const [showVMs, setShowVMs] = useState(true);
 
-        // Polling if scan is in progress
-        let pollInterval;
-        if (scanInProgress) {
-            pollInterval = setInterval(() => {
-                fetchNetboxData();
-            }, 5000);
+  const isScanning = scanStatus === 'running' || scanStatus === 'refreshing';
+
+  const eventSourceRef = useRef(null);
+  const devicesRef = useRef({});
+  const summaryPollRef = useRef(null);
+
+  const closeSse = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+  }, []);
+
+  const stopSummaryPoll = useCallback(() => {
+    if (summaryPollRef.current) {
+      clearInterval(summaryPollRef.current);
+      summaryPollRef.current = null;
+    }
+  }, []);
+
+  // Poll for summary until it arrives (LLM generation can take 30+ seconds for large estates).
+  // Does an immediate fetch first, then retries every 5s up to ~5 minutes.
+  const pollForSummary = useCallback(() => {
+    stopSummaryPoll();
+    let attempts = 0;
+    const MAX_ATTEMPTS = 60;
+
+    const tryFetch = async () => {
+      attempts++;
+      try {
+        const res = await fetch(`${apiBase}/api/results/${tenantId}/summary`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data) {
+            setSummary(data);
+            stopSummaryPoll();
+            return;
+          }
+        }
+      } catch (e) {
+        console.error('Error polling for summary:', e);
+      }
+      if (attempts >= MAX_ATTEMPTS) stopSummaryPoll();
+    };
+
+    // Fire immediately, then every 5s
+    tryFetch();
+    summaryPollRef.current = setInterval(tryFetch, 5000);
+  }, [apiBase, tenantId, stopSummaryPoll]);
+
+  // Open SSE stream (called after scan is triggered or when tenant loads)
+  const openSse = useCallback(() => {
+    closeSse();
+    devicesRef.current = {};
+
+    const es = new EventSource(`${apiBase}/api/results/${tenantId}/stream`);
+    eventSourceRef.current = es;
+
+    es.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'device') {
+          const d = msg.data;
+          devicesRef.current[d.resource_name] = d;
+          const list = Object.values(devicesRef.current).sort(
+            (a, b) => (b.highest_severity_score || 0) - (a.highest_severity_score || 0)
+          );
+          setDevices([...list]);
+
+          const done = list.filter(x => x.llm_analysis !== 'Scanning...').length;
+          setScanned(done);
+          setTotal(list.length);
+        } else if (msg.type === 'complete') {
+          setScanStatus('complete');
+          closeSse();
+          pollForSummary();
+        }
+      } catch (e) {
+        console.error('SSE parse error:', e);
+      }
+    };
+
+    es.onerror = () => {
+      // SSE closed by server is normal — check if scan completed
+      closeSse();
+    };
+  }, [apiBase, tenantId, closeSse, pollForSummary]);
+
+  // Manually force a fresh scan, bypassing cache
+  const triggerManualScan = useCallback(async () => {
+    if (isScanning) return;
+    setDevices([]);
+    setSummary(null);
+    setScanStatus('running');
+    setScanned(0);
+    setTotal(0);
+    setStaleNotice(null);
+    setCurrentPage(1);
+    devicesRef.current = {};
+    stopSummaryPoll();
+    try {
+      await fetch(`${apiBase}/api/scan/${tenantId}?tenant_name=${encodeURIComponent(tenantName)}&force=true`, { method: 'POST' });
+    } catch (e) {
+      console.error('Error triggering manual scan:', e);
+    }
+    openSse();
+  }, [apiBase, tenantId, tenantName, isScanning, closeSse, stopSummaryPoll, openSse]);
+
+  // Main effect: runs when tenantId changes
+  useEffect(() => {
+    if (!tenantId) return;
+
+    // Reset state for new tenant
+    setDevices([]);
+    setSummary(null);
+    setScanStatus('idle');
+    setScanned(0);
+    setTotal(0);
+    setStaleNotice(null);
+    setCurrentPage(1);
+    devicesRef.current = {};
+    closeSse();
+
+    const init = async () => {
+      // 1. Trigger scan (backend handles cache freshness logic)
+      try {
+        const res = await fetch(`${apiBase}/api/scan/${tenantId}?tenant_name=${encodeURIComponent(tenantName)}`, { method: 'POST' });
+        const data = await res.json();
+
+        if (data.status === 'cached') {
+          // Cache fresh — just load results
+          setScanStatus('complete');
+          const r2 = await fetch(`${apiBase}/api/results/${tenantId}`);
+          const cached = await r2.json();
+          const list = cached.devices || [];
+          devicesRef.current = Object.fromEntries(list.map(d => [d.resource_name, d]));
+          setDevices(list);
+          setTotal(list.length);
+          setScanned(list.length);
+          pollForSummary();
+          return;
         }
 
-        return () => {
-            if (pollInterval) clearInterval(pollInterval);
-        };
-    }, [backendReady, apiBase, showVirtualMachines, scanInProgress]); // Add scanInProgress to dependencies
+        if (data.status === 'refreshing') {
+          setStaleNotice(data.message);
+          setScanStatus('refreshing');
+          // Load existing stale results while the new scan runs
+          const r2 = await fetch(`${apiBase}/api/results/${tenantId}`);
+          const cached = await r2.json();
+          const list = cached.devices || [];
+          devicesRef.current = Object.fromEntries(list.map(d => [d.resource_name, d]));
+          setDevices(list);
+          pollForSummary();
+        } else {
+          setScanStatus('running');
+        }
+      } catch (e) {
+        console.error('Error triggering scan:', e);
+        setScanStatus('running');
+      }
 
-    useEffect(() => {
-        const fetchOverallSummary = async () => {
-            if (!backendReady && !scanInProgress) return;
-            try {
-                const response = await fetch(`${apiBase}/netbox/overall-summary`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                setOverallSummary(data);
-            } catch (e) {
-                console.error("Error fetching overall summary:", e);
-            }
-        };
+      // 2. Open SSE to receive live updates
+      openSse();
+    };
 
-        fetchOverallSummary();
-    }, [backendReady, scanInProgress, apiBase]);
+    init();
 
-    // Filtering Logic
-    const filteredDevices = devices.filter(device => {
-        const search = searchTerm.toLowerCase();
-        const searchMatch = (
-            (device.resource_name || '').toLowerCase().includes(search) ||
-            (device.resource_type || '').toLowerCase().includes(search) ||
-            (device.os || '').toLowerCase().includes(search)
-        );
-        const unknownMatch = showUnknown || (device.os && device.cves.length > 0);
-        return searchMatch && unknownMatch;
-    });
+    return () => { closeSse(); stopSummaryPoll(); };
+  }, [tenantId]); // intentionally only on tenantId change
 
-    // Progress Calculation - across ALL devices regardless of selected role
-    const totalDevicesCount = devices.length;
-    const scannedDevicesCount = devices.filter(d => d.llm_analysis !== 'Scanning...').length;
-    
-    // Fallback to global counts if no devices in current view but scan is running
-    const scanProgress = totalDevicesCount > 0 ? Math.round((scannedDevicesCount / totalDevicesCount) * 100) : 0;
+  // Dismiss stale notice once scan completes
+  useEffect(() => {
+    if (scanStatus === 'complete') setStaleNotice(null);
+  }, [scanStatus]);
 
-    // Pagination Logic
-    const effectiveItemsPerPage = itemsPerPage === 'All' ? filteredDevices.length : parseInt(itemsPerPage);
-    const totalPages = Math.ceil(filteredDevices.length / (effectiveItemsPerPage || 1));
-    const indexOfLastItem = currentPage * (effectiveItemsPerPage || filteredDevices.length);
-    const indexOfFirstItem = indexOfLastItem - (effectiveItemsPerPage || filteredDevices.length);
-    const currentItems = filteredDevices.slice(indexOfFirstItem, indexOfLastItem);
-
-    if (!backendReady && !scanInProgress) {
-        return <div className="text-white">Waiting for backend to be ready...</div>;
-    }
-    
-    if (error) {
-        return <div className="text-red-500">Error fetching data: {error}</div>;
-    }
-
-    return (
-        <div className="p-4 bg-black text-white min-h-screen">
-            {/* Progress Meter */}
-            {scanInProgress && (
-                <div className="mb-6 bg-gray-900/50 p-4 rounded-xl border border-gray-800 shadow-lg animate-pulse-subtle">
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-sm font-bold text-green-500 uppercase tracking-widest flex items-center">
-                            <div className="mr-2 w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
-                            Vulnerability Scan in Progress...
-                        </span>
-                        <span className="text-sm font-black text-white">{scanProgress}%</span>
-                    </div>
-                    <div className="w-full bg-gray-800 rounded-full h-3 border border-gray-700 overflow-hidden">
-                        <div 
-                            className="bg-gradient-to-r from-green-600 to-green-400 h-full transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(34,197,94,0.5)]"
-                            style={{ width: `${scanProgress}%` }}
-                        ></div>
-                    </div>
-                    <div className="flex justify-between mt-2">
-                        <p className="text-[10px] text-gray-500 uppercase font-bold">Processing {scannedDevicesCount} of {totalDevicesCount} resources</p>
-                        <p className="text-[10px] text-gray-400 font-mono italic">Real-time update active</p>
-                    </div>
-                </div>
-            )}
-
-            {/* Header and Filters */}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-                <div>
-                    <h2 className="text-2xl font-bold text-green-500">Netbox Vulnerabilities</h2>
-                    <p className="text-xs text-gray-500">Showing {filteredDevices.length} of {devices.length} devices</p>
-                </div>
-                
-                <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
-                    {/* Search Bar */}
-                    <div className="relative flex-grow md:flex-grow-0">
-                        <input
-                            type="text"
-                            placeholder="Search name, model, os..."
-                            value={searchTerm}
-                            onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                            className="bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-sm w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500/50"
-                        />
-                        {searchTerm && (
-                            <button 
-                                onClick={() => setSearchTerm('')}
-                                className="absolute right-2 top-2 text-gray-500 hover:text-white"
-                            >
-                                <X size={16} />
-                            </button>
-                        )}
-                    </div>
-{/* Items Per Page */}
-
-                    <div className="flex items-center">
-                        <label className="mr-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Show:</label>
-                        <select
-                            value={itemsPerPage}
-                            onChange={(e) => {
-                                setItemsPerPage(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                            className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-green-500/50"
-                        >
-                            {[5, 10, 25, 100, 'All'].map(val => (
-                                <option key={val} value={val}>{val}</option>
-                            ))}
-                        </select>
-                    </div>
-                    <div className="flex items-center">
-                        <input
-                            type="checkbox"
-                            id="show-unknown"
-                            checked={showUnknown}
-                            onChange={() => setShowUnknown(!showUnknown)}
-                            className="mr-2"
-                        />
-                        <label htmlFor="show-unknown">Show Unknown</label>
-                    </div>
-                    <div className="flex items-center">
-                        <input
-                            type="checkbox"
-                            id="show-vms"
-                            checked={showVirtualMachines}
-                            onChange={() => setShowVirtualMachines(!showVirtualMachines)}
-                            className="mr-2"
-                        />
-                        <label htmlFor="show-vms">Show Virtual Machines</label>
-                    </div>
-                </div>
-            </div>
-            
-            {loading ? (
-                <div className="flex items-center justify-center h-64">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500"></div>
-                    <span className="ml-3 text-gray-400">Scanning Netbox data...</span>
-                </div>
-            ) : (
-                <>
-                    <div className="space-y-2">
-                        {currentItems.map((device) => (
-                            <div 
-                                key={device.resource_name} 
-                                className={`flex items-center p-3 bg-gray-900/50 rounded-lg border-l-4 transition-all duration-300 hover:bg-gray-800/70 cursor-pointer ${getSeverityColor(device.highest_severity_score)}`}
-                                onClick={() => setSelectedDevice(device)}
-                            >
-                                <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center">
-                                    {getDeviceIcon(device.resource_type)}
-                                </div>
-                                <div className="flex-grow mx-4">
-                                    <h3 className="text-sm font-bold text-white truncate" title={(device.resource_name || '').toUpperCase()}>
-                                        {(device.resource_name || '').toUpperCase()}
-                                    </h3>
-                                    <p className="text-xs text-gray-500 truncate">{device.resource_type}</p>
-                                </div>
-                                <div className="flex-shrink-0 w-48 text-xs text-green-500/70 truncate text-right" title={device.os}>
-                                    {device.os}
-                                </div>
-                                <div className="flex-shrink-0 w-20 text-right">
-                                    <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
-                                        {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : "0.0"}
-                                    </span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-
-                    {/* Pagination Controls */}
-                    {itemsPerPage !== 'All' && totalPages > 1 && (
-                        <div className="flex justify-center items-center gap-2 mt-8 pb-8">
-                            <button
-                                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                                disabled={currentPage === 1}
-                                className="px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 disabled:opacity-30 hover:bg-gray-700 transition-colors"
-                            >
-                                Previous
-                            </button>
-                            <div className="flex gap-1">
-                                {[...Array(totalPages)].map((_, i) => {
-                                    const pageNum = i + 1;
-                                    // Show first, last, and pages around current
-                                    if (
-                                        pageNum === 1 || 
-                                        pageNum === totalPages || 
-                                        (pageNum >= currentPage - 1 && pageNum <= currentPage + 1)
-                                    ) {
-                                        return (
-                                            <button
-                                                key={pageNum}
-                                                onClick={() => setCurrentPage(pageNum)}
-                                                className={`w-10 h-10 rounded-lg border ${currentPage === pageNum ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                                            >
-                                                {pageNum}
-                                            </button>
-                                        );
-                                    } else if (pageNum === currentPage - 2 || pageNum === currentPage + 2) {
-                                        return <span key={pageNum} className="px-1">...</span>;
-                                    }
-                                    return null;
-                                })}
-                            </div>
-                            <button
-                                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                                disabled={currentPage === totalPages}
-                                className="px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 disabled:opacity-30 hover:bg-gray-700 transition-colors"
-                            >
-                                Next
-                            </button>
-                        </div>
-                    )}
-                </>
-            )}
-
-            {selectedDevice && (
-                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 p-6 rounded-lg max-w-3xl w-full border-2 border-gray-700">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-2xl font-bold text-green-500">{(selectedDevice.resource_name || '').toUpperCase()}</h2>
-                            <button onClick={() => setSelectedDevice(null)}>
-                                <X className="text-gray-400" />
-                            </button>
-                        </div>
-                        <div className="space-y-4 max-h-96 overflow-y-auto">
-                            {selectedDevice.cves.length > 0 ? (
-                                selectedDevice.cves.map((cve, index) => (
-                                    <div key={index} className="p-4 bg-gray-800 rounded-lg">
-                                        <div className="flex justify-between items-center">
-                                            <a 
-                                                href={`https://nvd.nist.gov/vuln/detail/${cve.id}`} 
-                                                target="_blank" 
-                                                rel="noopener noreferrer"
-                                                className="text-blue-500 hover:underline font-bold"
-                                            >
-                                                {cve.id}
-                                            </a>
-                                            <span className={`font-bold ${getSeverityTextClass(cve.score)}`}>
-                                                {cve.severity} - {cve.score}
-                                            </span>
-                                        </div>
-                                        <p className="mt-2 text-gray-300">{cve.description}</p>
-                                    </div>
-                                ))
-                            ) : (
-                                <p className="text-gray-400">No vulnerabilities found for this device.</p>
-                            )}
-                            <div className="p-4 bg-gray-800 rounded-lg">
-                                <h3 className="text-lg font-bold mb-2 text-yellow-500">AI Analysis</h3>
-                                <ReactMarkdown remarkPlugins={[remarkGfm]} className="prose prose-invert">
-                                    {selectedDevice.llm_analysis ? selectedDevice.llm_analysis.replace(/\n/g, '  \n') : "No AI analysis available for this device."}
-                                </ReactMarkdown>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
+  // Filtering
+  const filteredDevices = devices.filter(d => {
+    const search = searchTerm.toLowerCase();
+    const searchMatch = (
+      (d.resource_name || '').toLowerCase().includes(search) ||
+      (d.resource_type || '').toLowerCase().includes(search) ||
+      (d.os || '').toLowerCase().includes(search)
     );
+    const unknownMatch = showUnknown || (d.cves && d.cves.length > 0);
+    const vmMatch = showVMs || d.resource_category !== 'vm';
+    return searchMatch && unknownMatch && vmMatch;
+  });
+
+  const scanProgress = total > 0 ? Math.round((scanned / total) * 100) : 0;
+  const effectiveItemsPerPage = itemsPerPage === 'All' ? filteredDevices.length : parseInt(itemsPerPage);
+  const totalPages = Math.ceil(filteredDevices.length / (effectiveItemsPerPage || 1));
+  const pageItems = filteredDevices.slice(
+    (currentPage - 1) * (effectiveItemsPerPage || filteredDevices.length),
+    currentPage * (effectiveItemsPerPage || filteredDevices.length)
+  );
+
+  return (
+    <div className="p-4 bg-black text-white min-h-screen">
+
+      {/* STALE CACHE NOTICE */}
+      {staleNotice && (
+        <div className="mb-4 flex items-center gap-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl px-4 py-3">
+          <Clock size={14} className="text-yellow-400 flex-shrink-0" />
+          <p className="text-sm text-yellow-300 flex-grow">{staleNotice}</p>
+          <button onClick={() => setStaleNotice(null)} className="text-yellow-500 hover:text-white">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* SCAN PROGRESS */}
+      {isScanning && (
+        <div className="mb-4 bg-gray-900/50 p-4 rounded-xl border border-gray-800 shadow-lg">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-sm font-bold text-green-500 uppercase tracking-widest flex items-center gap-2">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-ping" />
+              {scanStatus === 'refreshing' ? 'Refreshing scan in background...' : 'Vulnerability Scan in Progress...'}
+            </span>
+            <span className="text-sm font-black text-white">{scanProgress}%</span>
+          </div>
+          <div className="w-full bg-gray-800 rounded-full h-3 border border-gray-700 overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-green-600 to-green-400 h-full transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(34,197,94,0.5)]"
+              style={{ width: `${scanProgress}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-2">
+            <p className="text-[10px] text-gray-500 uppercase font-bold">Processing {scanned} of {total} resources</p>
+            <p className="text-[10px] text-gray-400 font-mono italic">Real-time update active</p>
+          </div>
+        </div>
+      )}
+
+      {/* ESTATE SUMMARY */}
+      <EstateSummaryPanel summary={summary} tenantName={tenantName} />
+
+      {/* HEADER + FILTERS */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4 bg-gray-900/50 p-4 rounded-xl border border-gray-800">
+        <div className="flex items-center gap-3">
+          <div>
+            <h2 className="text-2xl font-bold text-green-500">{tenantName} — Vulnerabilities</h2>
+            <p className="text-xs text-gray-500">Showing {filteredDevices.length} of {devices.length} resources</p>
+          </div>
+          <button
+            onClick={triggerManualScan}
+            disabled={isScanning}
+            title="Force a fresh scan"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-gray-800 border-gray-700 text-gray-300 hover:bg-green-900/40 hover:border-green-500/50 hover:text-green-400"
+          >
+            <RefreshCw size={12} className={isScanning ? 'animate-spin' : ''} />
+            Rescan
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+          <div className="relative flex-grow md:flex-grow-0">
+            <input
+              type="text"
+              placeholder="Search name, model, os..."
+              value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              className="bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-sm w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500/50"
+            />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm('')} className="absolute right-2 top-2 text-gray-500 hover:text-white">
+                <X size={16} />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Show:</label>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => { setItemsPerPage(e.target.value); setCurrentPage(1); }}
+              className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-green-500/50"
+            >
+              {[10, 25, 100, 'All'].map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" checked={showUnknown} onChange={() => setShowUnknown(v => !v)} className="accent-green-500" />
+            Unknown
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" checked={showVMs} onChange={() => setShowVMs(v => !v)} className="accent-green-500" />
+            Virtual Machines
+          </label>
+        </div>
+      </div>
+
+      {/* DEVICE LIST */}
+      {devices.length === 0 && scanStatus === 'idle' ? (
+        <div className="flex items-center justify-center h-40 text-gray-500 text-sm">
+          <RefreshCw size={14} className="animate-spin mr-2" /> Initializing scan...
+        </div>
+      ) : (
+        <>
+          <div className="space-y-2">
+            {pageItems.map((device) => (
+              <div
+                key={device.resource_name}
+                className={`flex items-center p-3 bg-gray-900/50 rounded-lg border-l-4 transition-all duration-300 hover:bg-gray-800/70 cursor-pointer ${getSeverityBorderColor(device.highest_severity_score)}`}
+                onClick={() => setSelectedDevice(device)}
+              >
+                <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center">
+                  {getDeviceIcon(device.resource_type)}
+                </div>
+                <div className="flex-grow mx-4 min-w-0">
+                  <h3 className="text-sm font-bold text-white truncate" title={(device.resource_name || '').toUpperCase()}>
+                    {(device.resource_name || '').toUpperCase()}
+                  </h3>
+                  <p className="text-xs text-gray-500 truncate">{device.resource_type}</p>
+                </div>
+                <div className="flex-shrink-0 w-48 text-xs text-green-500/70 truncate text-right hidden md:block" title={device.os}>
+                  {device.os}
+                </div>
+                <div className="flex-shrink-0 w-20 text-right">
+                  {device.llm_analysis === 'Scanning...' ? (
+                    <RefreshCw size={14} className="animate-spin text-gray-600 ml-auto" />
+                  ) : (
+                    <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
+                      {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : '0.0'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* PAGINATION */}
+          {itemsPerPage !== 'All' && totalPages > 1 && (
+            <div className="flex justify-center items-center gap-2 mt-8 pb-8">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                className="px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 disabled:opacity-30 hover:bg-gray-700 transition-colors"
+              >
+                Previous
+              </button>
+              <div className="flex gap-1">
+                {[...Array(totalPages)].map((_, i) => {
+                  const n = i + 1;
+                  if (n === 1 || n === totalPages || (n >= currentPage - 1 && n <= currentPage + 1)) {
+                    return (
+                      <button
+                        key={n}
+                        onClick={() => setCurrentPage(n)}
+                        className={`w-10 h-10 rounded-lg border ${currentPage === n ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
+                      >
+                        {n}
+                      </button>
+                    );
+                  } else if (n === currentPage - 2 || n === currentPage + 2) {
+                    return <span key={n} className="px-1 self-center text-gray-600">…</span>;
+                  }
+                  return null;
+                })}
+              </div>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 disabled:opacity-30 hover:bg-gray-700 transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* DEVICE DETAIL MODAL */}
+      {selectedDevice && (
+        <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 p-6 rounded-xl max-w-3xl w-full border-2 border-gray-700 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4 flex-shrink-0">
+              <div>
+                <h2 className="text-2xl font-bold text-green-500">{(selectedDevice.resource_name || '').toUpperCase()}</h2>
+                <p className="text-xs text-gray-500 mt-1">{selectedDevice.resource_type} · {selectedDevice.os}</p>
+              </div>
+              <button onClick={() => setSelectedDevice(null)} className="text-gray-400 hover:text-white p-1">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-grow space-y-4 pr-1">
+              {selectedDevice.cves && selectedDevice.cves.length > 0 ? (
+                selectedDevice.cves.map((cve, i) => (
+                  <div key={i} className="p-4 bg-gray-800 rounded-lg">
+                    <div className="flex justify-between items-center">
+                      <a
+                        href={`https://nvd.nist.gov/vuln/detail/${cve.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:underline font-bold font-mono"
+                      >
+                        {cve.id}
+                      </a>
+                      <span className={`font-bold ${getSeverityTextClass(cve.score)}`}>
+                        {cve.severity} — {cve.score}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-gray-300 text-sm">{cve.description}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-gray-400">No vulnerabilities found for this device.</p>
+              )}
+              <div className="p-4 bg-gray-800 rounded-lg">
+                <h3 className="text-lg font-bold mb-2 text-yellow-500">AI Analysis</h3>
+                {selectedDevice.llm_analysis === 'Scanning...' || selectedDevice.llm_analysis === 'Analyzing vulnerabilities...' ? (
+                  <div className="flex items-center gap-2 text-gray-400 text-sm">
+                    <RefreshCw size={14} className="animate-spin" /> Generating analysis...
+                  </div>
+                ) : (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} className="prose prose-invert prose-sm">
+                    {(selectedDevice.llm_analysis || 'No AI analysis available.').replace(/\n/g, '  \n')}
+                  </ReactMarkdown>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default NetboxVulnerabilities;

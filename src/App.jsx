@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp } from 'lucide-react';
 import NetboxVulnerabilities from './components/NetboxVulnerabilities';
 
 const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
@@ -11,6 +11,152 @@ const formatAge = (isoDate) => {
   if (diffH < 1) return `${Math.round(diffH * 60)}m ago`;
   if (diffH < 24) return `${Math.round(diffH)}h ago`;
   return `${Math.round(diffH / 24)}d ago`;
+};
+
+// ---------------------------------------------------------------------------
+// GLOBAL SCAN PANEL
+// ---------------------------------------------------------------------------
+const fmtSecs = (s) => {
+  if (s == null) return '—';
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return sec > 0 ? `${m}m ${sec}s` : `${m}m`;
+};
+
+const GlobalScanPanel = ({ apiBase }) => {
+  const [open, setOpen] = useState(false);
+  const [scanState, setScanState] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const esRef = useRef(null);
+
+  const connectSse = useCallback(() => {
+    if (esRef.current) esRef.current.close();
+    const es = new EventSource(`${apiBase}/api/scan/global/stream`);
+    esRef.current = es;
+    es.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.state) setScanState(msg.state);
+        if (msg.type === 'complete') {
+          es.close();
+          esRef.current = null;
+        }
+      } catch {}
+    };
+    es.onerror = () => { es.close(); esRef.current = null; };
+  }, [apiBase]);
+
+  // Fetch initial status on mount
+  useEffect(() => {
+    fetch(`${apiBase}/api/scan/global/status`)
+      .then(r => r.ok ? r.json() : null)
+      .then(s => { if (s) setScanState(s); })
+      .catch(() => {});
+  }, [apiBase]);
+
+  // Open SSE while scan is running
+  useEffect(() => {
+    if (scanState?.status === 'running' && !esRef.current) connectSse();
+  }, [scanState?.status, connectSse]);
+
+  useEffect(() => () => esRef.current?.close(), []);
+
+  const startScan = async () => {
+    setStarting(true);
+    setOpen(true);
+    try {
+      await fetch(`${apiBase}/api/scan/global`, { method: 'POST' });
+      connectSse();
+    } catch (e) {
+      console.error('Failed to start global scan:', e);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const status = scanState?.status || 'idle';
+  const isRunning = status === 'running';
+  const isDone = status === 'complete' || status === 'error';
+
+  const btnLabel = starting ? 'Starting…' : isRunning ? 'Scanning…' : 'Scan All Tenants';
+  const btnIcon = (starting || isRunning)
+    ? <Loader2 size={13} className="animate-spin" />
+    : <Globe size={13} />;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => isDone || isRunning ? setOpen(o => !o) : startScan()}
+        disabled={starting || isRunning}
+        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-60 disabled:cursor-not-allowed bg-gray-800 border-gray-700 text-gray-300 hover:bg-green-900/30 hover:border-green-500/40 hover:text-green-400"
+      >
+        {btnIcon}
+        {btnLabel}
+        {(isDone || isRunning) && <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />}
+      </button>
+
+      {open && scanState && (
+        <div className="absolute right-0 top-full mt-2 w-[420px] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-50 p-4 text-xs">
+          <div className="flex items-center justify-between mb-3">
+            <span className="font-bold text-white uppercase tracking-widest text-[10px]">Global Scan</span>
+            <div className="flex items-center gap-2">
+              {isRunning && <span className="flex items-center gap-1 text-green-400"><Loader2 size={11} className="animate-spin" /> Running</span>}
+              {status === 'complete' && <span className="flex items-center gap-1 text-green-400"><CheckCircle size={11} /> Complete</span>}
+              {status === 'error' && <span className="text-red-400">Error</span>}
+              <button onClick={() => setOpen(false)} className="text-gray-500 hover:text-white"><X size={13} /></button>
+            </div>
+          </div>
+
+          {/* Phase */}
+          <p className="text-gray-400 mb-3 italic">{scanState.phase || 'Initializing…'}</p>
+
+          {/* Stats grid */}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            {[
+              ['Devices fetched',   `${scanState.devices_fetched?.toLocaleString() || 0} / ${scanState.total_devices?.toLocaleString() || '?'}`],
+              ['Unique combos',     (scanState.unique_combos || 0).toLocaleString()],
+              ['NVD queries',       `${scanState.nvd_queried || 0} / ${scanState.nvd_total || 0}  (${scanState.nvd_cached || 0} cached)`],
+              ['Tenants saved',     (scanState.tenants_saved || 0).toLocaleString()],
+            ].map(([label, val]) => (
+              <div key={label} className="bg-gray-800 rounded-lg px-3 py-2">
+                <div className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</div>
+                <div className="text-white font-mono font-bold mt-0.5">{val}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Elapsed + phase timings */}
+          <div className="border-t border-gray-800 pt-3 flex flex-wrap gap-x-4 gap-y-1 text-gray-500">
+            <span>Elapsed: <span className="text-gray-300 font-mono">{fmtSecs(scanState.elapsed_seconds)}</span></span>
+            {scanState.phase_timings?.inventory_seconds != null && (
+              <span>Inventory: <span className="text-gray-300 font-mono">{fmtSecs(scanState.phase_timings.inventory_seconds)}</span></span>
+            )}
+            {scanState.phase_timings?.nvd_seconds != null && (
+              <span>NVD: <span className="text-gray-300 font-mono">{fmtSecs(scanState.phase_timings.nvd_seconds)}</span></span>
+            )}
+            {scanState.phase_timings?.save_seconds != null && (
+              <span>Save: <span className="text-gray-300 font-mono">{fmtSecs(scanState.phase_timings.save_seconds)}</span></span>
+            )}
+          </div>
+
+          {scanState.error && (
+            <p className="mt-2 text-red-400 break-words">{scanState.error}</p>
+          )}
+
+          {/* Re-run button once done */}
+          {isDone && (
+            <button
+              onClick={startScan}
+              disabled={starting}
+              className="mt-3 w-full py-1.5 rounded-lg border border-gray-700 text-gray-400 hover:border-green-500/40 hover:text-green-400 transition-colors text-xs font-semibold"
+            >
+              Run Again
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -210,6 +356,8 @@ export default function App() {
           </div>
 
           <div className="flex-grow" />
+
+          <GlobalScanPanel apiBase={apiBase} />
 
           <TenantSelector
             selectedTenant={selectedTenant}

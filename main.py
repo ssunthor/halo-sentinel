@@ -377,15 +377,20 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
         platform_info = resource.get("platform")
         os_name = platform_info.get("name") if platform_info else None
         os_version = resource.get("custom_fields", {}).get("os_build")
+        serial = resource.get("serial") or ""
+        pon = resource.get("custom_fields", {}).get("cmd_pon") or ""
     elif resource_type == "vm":
         model = (resource.get("cluster") or {}).get("name") or "Unknown Cluster"
         platform_info = resource.get("platform")
         os_name = platform_info.get("name") if platform_info else None
         os_version = resource.get("custom_fields", {}).get("os_version")
+        serial = ""
+        pon = resource.get("custom_fields", {}).get("cmd_pon") or ""
     else:
         return {
             "resource_name": resource_name, "os": "Unknown", "resource_type": "Unknown",
-            "resource_category": resource_type, "highest_severity_score": 0.0,
+            "resource_category": resource_type, "platform_name": None, "os_version": None,
+            "serial": None, "pon": None, "highest_severity_score": 0.0,
             "cves": [], "is_vulnerable": False, "llm_analysis": "Invalid resource type."
         }
 
@@ -394,6 +399,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
         return {
             "resource_name": resource_name, "os": f"{os_name or 'Unknown'} {os_version or ''}",
             "resource_type": model, "resource_category": resource_type,
+            "platform_name": os_name, "os_version": os_version, "serial": serial, "pon": pon,
             "highest_severity_score": 0.0, "cves": [], "is_vulnerable": False,
             "llm_analysis": "Status Unknown: Missing required NetBox fields (Platform or OS Version)."
         }
@@ -445,6 +451,10 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "os": f"{os_name} {os_version or ''}",
             "resource_type": model,
             "resource_category": resource_type,
+            "platform_name": os_name,
+            "os_version": os_version,
+            "serial": serial,
+            "pon": pon,
             "highest_severity_score": highest,
             "cves": device_cves,
             "is_vulnerable": len(device_cves) > 0,
@@ -477,6 +487,10 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "is_vulnerable": False,
             "resource_type": model,
             "resource_category": resource_type,
+            "platform_name": os_name,
+            "os_version": os_version,
+            "serial": serial,
+            "pon": pon,
             "highest_severity_score": 0.0,
             "cves": [],
             "llm_analysis": f"Error: {str(e)}"
@@ -550,17 +564,25 @@ async def run_tenant_scan(tenant_id: str, tenant_name: str):
                     platform_info = d.get("platform")
                     os_name = platform_info.get("name") if platform_info else None
                     os_version = d.get("custom_fields", {}).get("os_version")
+                    serial = ""
+                    pon = d.get("custom_fields", {}).get("cmd_pon") or ""
                 else:
                     model = (d.get("device_type") or {}).get("model") or "Unknown Model"
                     platform_info = d.get("platform")
                     os_name = platform_info.get("name") if platform_info else None
                     os_version = d.get("custom_fields", {}).get("os_build")
+                    serial = d.get("serial") or ""
+                    pon = d.get("custom_fields", {}).get("cmd_pon") or ""
 
                 skeleton = {
                     "resource_name": rname,
                     "os": f"{os_name or 'Unknown'} {os_version or ''}",
                     "resource_type": model,
                     "resource_category": rtype,
+                    "platform_name": os_name,
+                    "os_version": os_version,
+                    "serial": serial,
+                    "pon": pon,
                     "highest_severity_score": 0.0,
                     "cves": [],
                     "is_vulnerable": False,
@@ -804,9 +826,12 @@ async def run_global_scan():
                 if rtype == "vm":
                     model = (d.get("cluster") or {}).get("name") or "Unknown Cluster"
                     os_version = d.get("custom_fields", {}).get("os_version")
+                    serial = None
                 else:
                     model = (d.get("device_type") or {}).get("model") or "Unknown Model"
                     os_version = d.get("custom_fields", {}).get("os_build")
+                    serial = d.get("serial") or None
+                pon = d.get("custom_fields", {}).get("cmd_pon") or None
                 llm = ("Vulnerabilities found — open this tenant for AI analysis."
                        if device_cves else "No vulnerabilities detected.")
                 return {
@@ -814,6 +839,10 @@ async def run_global_scan():
                     "os": f"{os_name or 'Unknown'} {os_version or ''}".strip(),
                     "resource_type": model,
                     "resource_category": rtype,
+                    "platform_name": os_name,
+                    "os_version": os_version,
+                    "serial": serial,
+                    "pon": pon,
                     "highest_severity_score": highest,
                     "cves": device_cves,
                     "is_vulnerable": len(device_cves) > 0,
@@ -1203,6 +1232,110 @@ async def stream_results(tenant_id: str):
         event_generator(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+
+@app.get("/api/stats")
+async def get_estate_stats():
+    """Aggregate statistics across all scanned tenants for the leaderboard landing page."""
+    loop = asyncio.get_running_loop()
+    stats, top_cves, top_platforms, top_types, severity = await asyncio.gather(
+        loop.run_in_executor(thread_pool, db.get_estate_stats),
+        loop.run_in_executor(thread_pool, db.get_top_cves, 20),
+        loop.run_in_executor(thread_pool, db.get_top_platforms, 15),
+        loop.run_in_executor(thread_pool, db.get_top_device_types, 15),
+        loop.run_in_executor(thread_pool, db.get_severity_breakdown),
+    )
+    return {
+        "estate": stats,
+        "top_cves": top_cves,
+        "top_platforms": top_platforms,
+        "top_device_types": top_types,
+        "severity_breakdown": severity,
+    }
+
+
+def _build_excel(rows: list) -> bytes:
+    from io import BytesIO
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "CVE Export"
+
+    headers = [
+        "Client Name", "Device Name", "PON", "Platform", "Device Type",
+        "Current Firmware", "Recommended Firmware", "Serial Number",
+        "Device CVE Score", "Number of Vulnerabilities",
+    ]
+    hdr_fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+    hdr_font = Font(color="FFFFFF", bold=True)
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 20
+
+    for i, row in enumerate(rows, 2):
+        ws.cell(row=i, column=1, value=row.get("tenant_name"))
+        ws.cell(row=i, column=2, value=row.get("resource_name"))
+        ws.cell(row=i, column=3, value=row.get("pon"))
+        ws.cell(row=i, column=4, value=row.get("platform_name"))
+        ws.cell(row=i, column=5, value=row.get("device_type"))
+        ws.cell(row=i, column=6, value=row.get("current_firmware"))
+        ws.cell(row=i, column=7, value="")
+        ws.cell(row=i, column=8, value=row.get("serial"))
+        score = round(row.get("cve_score") or 0.0, 1)
+        sc = ws.cell(row=i, column=9, value=score)
+        ws.cell(row=i, column=10, value=row.get("cve_count", 0))
+        if score >= 9.0:
+            sc.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+            sc.font = Font(color="FFFFFF", bold=True)
+        elif score >= 7.0:
+            sc.fill = PatternFill(start_color="FF8C00", end_color="FF8C00", fill_type="solid")
+            sc.font = Font(color="FFFFFF")
+        elif score >= 4.0:
+            sc.fill = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")
+
+    for col, width in enumerate([20, 30, 15, 20, 25, 20, 22, 20, 18, 22], 1):
+        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+    ws.freeze_panes = "A2"
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@app.get("/api/export/all")
+async def export_all_tenants():
+    """Download an Excel file of all devices across every scanned tenant."""
+    loop = asyncio.get_running_loop()
+    rows = await loop.run_in_executor(thread_pool, db.get_export_rows, None)
+    xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows)
+    fname = f"cve_export_all_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+@app.get("/api/export/tenant/{tenant_id}")
+async def export_tenant(tenant_id: str):
+    """Download an Excel file of devices for a single tenant."""
+    loop = asyncio.get_running_loop()
+    rows = await loop.run_in_executor(thread_pool, db.get_export_rows, str(tenant_id))
+    if not rows:
+        raise HTTPException(status_code=404, detail="No data found for this tenant.")
+    xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows)
+    safe = re.sub(r'[^\w\-]', '_', rows[0].get("tenant_name", tenant_id))
+    fname = f"cve_export_{safe}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
     )
 
 

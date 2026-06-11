@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import json
 import os
+import re
 import glob
 from datetime import datetime
 
@@ -25,7 +26,7 @@ def _connect() -> sqlite3.Connection:
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.execute("PRAGMA foreign_keys=ON")
         _conn.execute("PRAGMA synchronous=NORMAL")
-        _conn.execute("PRAGMA cache_size=-32000")   # 32 MB page cache
+        _conn.execute("PRAGMA cache_size=-32000")
     return _conn
 
 
@@ -34,13 +35,13 @@ def init_db():
     with _write_lock:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS tenants (
-                tenant_id       TEXT PRIMARY KEY,
-                name            TEXT NOT NULL,
-                scanned_at      TEXT,
-                bulk_scan       INTEGER DEFAULT 0,
-                total_devices   INTEGER DEFAULT 0,
-                vulnerable_devices INTEGER DEFAULT 0,
-                max_score       REAL DEFAULT 0.0
+                tenant_id           TEXT PRIMARY KEY,
+                name                TEXT NOT NULL,
+                scanned_at          TEXT,
+                bulk_scan           INTEGER DEFAULT 0,
+                total_devices       INTEGER DEFAULT 0,
+                vulnerable_devices  INTEGER DEFAULT 0,
+                max_score           REAL DEFAULT 0.0
             );
 
             CREATE TABLE IF NOT EXISTS devices (
@@ -50,6 +51,10 @@ def init_db():
                 resource_category       TEXT,
                 resource_type           TEXT,
                 os                      TEXT,
+                platform_name           TEXT,
+                os_version              TEXT,
+                serial                  TEXT,
+                pon                     TEXT,
                 highest_severity_score  REAL DEFAULT 0.0,
                 is_vulnerable           INTEGER DEFAULT 0,
                 llm_analysis            TEXT,
@@ -83,10 +88,41 @@ def init_db():
                 FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
             );
 
-            CREATE INDEX IF NOT EXISTS idx_devices_tenant   ON devices(tenant_id);
-            CREATE INDEX IF NOT EXISTS idx_devices_score    ON devices(highest_severity_score DESC);
-            CREATE INDEX IF NOT EXISTS idx_cves_device      ON cves(device_id);
-            CREATE INDEX IF NOT EXISTS idx_tenants_score    ON tenants(max_score DESC, vulnerable_devices DESC);
+            CREATE INDEX IF NOT EXISTS idx_devices_tenant        ON devices(tenant_id);
+            CREATE INDEX IF NOT EXISTS idx_devices_score         ON devices(highest_severity_score DESC);
+            CREATE INDEX IF NOT EXISTS idx_devices_platform      ON devices(platform_name);
+            CREATE INDEX IF NOT EXISTS idx_cves_device           ON cves(device_id);
+            CREATE INDEX IF NOT EXISTS idx_cves_id               ON cves(cve_id);
+            CREATE INDEX IF NOT EXISTS idx_tenants_score         ON tenants(max_score DESC, vulnerable_devices DESC);
+        """)
+        conn.commit()
+
+        # Migrate existing tables: add new columns if absent
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(devices)")}
+        for col, typedef in [
+            ("platform_name", "TEXT"),
+            ("os_version",    "TEXT"),
+            ("serial",        "TEXT"),
+            ("pon",           "TEXT"),
+        ]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {typedef}")
+
+        # Best-effort backfill: set platform_name = everything in os before first
+        # digit-led token (e.g. "FortiOS 7.4.2" → "FortiOS").
+        # This only runs for rows that predate the new column — new scans populate
+        # platform_name directly from NetBox.
+        conn.execute("""
+            UPDATE devices
+            SET platform_name = TRIM(SUBSTR(os, 1,
+                CASE
+                    WHEN INSTR(os, ' ') > 0
+                    THEN INSTR(os, ' ') - 1
+                    ELSE LENGTH(os)
+                END
+            ))
+            WHERE (platform_name IS NULL OR platform_name = '')
+              AND os IS NOT NULL AND os != ''
         """)
         conn.commit()
 
@@ -108,18 +144,14 @@ def get_cache_age_hours(tenant_id: str) -> float | None:
     ).fetchone()
     if not row or not row["scanned_at"]:
         return None
-    scanned_at = datetime.fromisoformat(row["scanned_at"])
-    return (datetime.utcnow() - scanned_at).total_seconds() / 3600
+    return (datetime.utcnow() - datetime.fromisoformat(row["scanned_at"])).total_seconds() / 3600
 
 
 def list_recent_tenants(limit: int = 200) -> list[dict]:
-    """Return tenants ordered by most-recently scanned, for the dropdown."""
     rows = _connect().execute("""
         SELECT tenant_id, name, scanned_at, total_devices, vulnerable_devices, max_score
-        FROM tenants
-        WHERE scanned_at IS NOT NULL
-        ORDER BY scanned_at DESC
-        LIMIT ?
+        FROM tenants WHERE scanned_at IS NOT NULL
+        ORDER BY scanned_at DESC LIMIT ?
     """, (limit,)).fetchall()
     return [dict(r) for r in rows]
 
@@ -156,14 +188,19 @@ def save_tenant_results(tenant_id: str, data: dict):
                 cur = conn.execute("""
                     INSERT INTO devices
                         (tenant_id, resource_name, resource_category, resource_type,
-                         os, highest_severity_score, is_vulnerable, llm_analysis, scanned_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         os, platform_name, os_version, serial, pon,
+                         highest_severity_score, is_vulnerable, llm_analysis, scanned_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     tenant_id,
                     dev.get("resource_name"),
                     dev.get("resource_category"),
                     dev.get("resource_type"),
                     dev.get("os"),
+                    dev.get("platform_name"),
+                    dev.get("os_version"),
+                    dev.get("serial"),
+                    dev.get("pon"),
                     dev.get("highest_severity_score", 0.0),
                     1 if dev.get("is_vulnerable") else 0,
                     dev.get("llm_analysis"),
@@ -179,7 +216,6 @@ def save_tenant_results(tenant_id: str, data: dict):
                         "INSERT INTO cves (device_id, cve_id, score, severity, description) VALUES (?,?,?,?,?)",
                         cve_rows,
                     )
-
             conn.commit()
         except Exception:
             conn.rollback()
@@ -187,7 +223,6 @@ def save_tenant_results(tenant_id: str, data: dict):
 
 
 def load_tenant_results(tenant_id: str) -> dict:
-    """Return results in the same shape as the old JSON cache."""
     conn = _connect()
     tenant = get_tenant(tenant_id)
     if not tenant:
@@ -217,6 +252,10 @@ def load_tenant_results(tenant_id: str) -> dict:
                 "resource_category": dev["resource_category"],
                 "resource_type": dev["resource_type"],
                 "os": dev["os"],
+                "platform_name": dev["platform_name"],
+                "os_version": dev["os_version"],
+                "serial": dev["serial"],
+                "pon": dev["pon"],
                 "highest_severity_score": dev["highest_severity_score"],
                 "is_vulnerable": bool(dev["is_vulnerable"]),
                 "llm_analysis": dev["llm_analysis"],
@@ -287,7 +326,6 @@ def load_tenant_summary(tenant_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def get_leaderboard(limit: int = 100, min_devices: int = 1) -> list[dict]:
-    """Return tenants ranked by worst security posture."""
     rows = _connect().execute("""
         SELECT
             t.tenant_id, t.name, t.scanned_at, t.total_devices,
@@ -306,14 +344,136 @@ def get_leaderboard(limit: int = 100, min_devices: int = 1) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Estate-wide stats (for landing page dashboard)
+# ---------------------------------------------------------------------------
+
+def get_estate_stats() -> dict:
+    conn = _connect()
+    row = conn.execute("""
+        SELECT
+            COUNT(DISTINCT tenant_id)               AS total_tenants,
+            COUNT(*)                                AS total_devices,
+            SUM(is_vulnerable)                      AS vulnerable_devices,
+            MAX(highest_severity_score)             AS max_score,
+            (SELECT COUNT(*) FROM cves)             AS total_cve_instances,
+            (SELECT MAX(scanned_at) FROM tenants)   AS last_scan
+        FROM devices
+    """).fetchone()
+
+    critical_devices = conn.execute("""
+        SELECT COUNT(DISTINCT d.id) FROM devices d
+        JOIN cves c ON d.id = c.device_id WHERE c.score >= 9.0
+    """).fetchone()[0] or 0
+
+    d = dict(row)
+    d["critical_devices"] = critical_devices
+    d["vulnerable_devices"] = d["vulnerable_devices"] or 0
+    return d
+
+
+def get_top_cves(limit: int = 20) -> list[dict]:
+    """Most widespread CVEs across the entire estate."""
+    rows = _connect().execute("""
+        SELECT
+            c.cve_id,
+            MAX(c.score)                    AS score,
+            MAX(c.severity)                 AS severity,
+            COUNT(*)                        AS device_count,
+            COUNT(DISTINCT d.tenant_id)     AS tenant_count,
+            MAX(c.description)              AS description
+        FROM cves c
+        JOIN devices d ON c.device_id = d.id
+        GROUP BY c.cve_id
+        ORDER BY device_count DESC, score DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_top_platforms(limit: int = 15) -> list[dict]:
+    """OS platforms with the most vulnerable devices."""
+    rows = _connect().execute("""
+        SELECT
+            COALESCE(NULLIF(platform_name,''), 'Unknown') AS platform,
+            COUNT(*)                                       AS total_devices,
+            SUM(is_vulnerable)                             AS vulnerable_devices,
+            MAX(highest_severity_score)                    AS max_score,
+            ROUND(100.0 * SUM(is_vulnerable) / COUNT(*), 1) AS vuln_pct
+        FROM devices
+        GROUP BY platform_name
+        HAVING total_devices > 0
+        ORDER BY vulnerable_devices DESC, max_score DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_top_device_types(limit: int = 15) -> list[dict]:
+    """Device models/types with the most vulnerable units."""
+    rows = _connect().execute("""
+        SELECT
+            COALESCE(NULLIF(resource_type,''), 'Unknown') AS device_type,
+            resource_category,
+            COUNT(*)                                       AS total_devices,
+            SUM(is_vulnerable)                             AS vulnerable_devices,
+            MAX(highest_severity_score)                    AS max_score
+        FROM devices
+        WHERE resource_type NOT IN ('Unknown Model','Unknown Cluster','')
+          AND resource_type IS NOT NULL
+        GROUP BY resource_type
+        ORDER BY vulnerable_devices DESC, max_score DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_severity_breakdown() -> dict:
+    """Count of CVE instances by severity band across the whole estate."""
+    rows = _connect().execute("""
+        SELECT UPPER(COALESCE(severity,'UNKNOWN')) AS sev, COUNT(*) AS cnt
+        FROM cves GROUP BY sev ORDER BY cnt DESC
+    """).fetchall()
+    return {r["sev"]: r["cnt"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Export data
+# ---------------------------------------------------------------------------
+
+def get_export_rows(tenant_id: str | None = None) -> list[dict]:
+    """
+    Return one row per device suitable for Excel export.
+    Pass tenant_id to limit to a single tenant, or None for all.
+    """
+    where = "WHERE d.tenant_id = ?" if tenant_id else ""
+    params = (tenant_id,) if tenant_id else ()
+    rows = _connect().execute(f"""
+        SELECT
+            t.name                      AS tenant_name,
+            d.resource_name,
+            d.pon,
+            d.platform_name,
+            d.resource_type             AS device_type,
+            d.os_version                AS current_firmware,
+            d.serial,
+            d.highest_severity_score    AS cve_score,
+            d.resource_category,
+            COUNT(c.id)                 AS cve_count
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        LEFT JOIN cves c ON d.id = c.device_id
+        {where}
+        GROUP BY d.id
+        ORDER BY t.name ASC, d.highest_severity_score DESC
+    """, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # One-time JSON → SQLite migration
 # ---------------------------------------------------------------------------
 
 def migrate_from_json(cache_dir: str) -> int:
-    """
-    Import any tenant_*_results.json files that are not yet in the DB.
-    Safe to call on every startup — skips tenants already present.
-    """
     migrated = 0
     conn = _connect()
 

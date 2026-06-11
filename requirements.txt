@@ -6,3 +6,4 @@ uvloop
 orjson
 requests
 urllib3
+openpyxl

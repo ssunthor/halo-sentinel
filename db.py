@@ -90,7 +90,6 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_devices_tenant        ON devices(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_devices_score         ON devices(highest_severity_score DESC);
-            CREATE INDEX IF NOT EXISTS idx_devices_platform      ON devices(platform_name);
             CREATE INDEX IF NOT EXISTS idx_cves_device           ON cves(device_id);
             CREATE INDEX IF NOT EXISTS idx_cves_id               ON cves(cve_id);
             CREATE INDEX IF NOT EXISTS idx_tenants_score         ON tenants(max_score DESC, vulnerable_devices DESC);
@@ -107,6 +106,9 @@ def init_db():
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {typedef}")
+
+        # Create index on platform_name after column is guaranteed to exist
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_platform ON devices(platform_name)")
 
         # Best-effort backfill: set platform_name = everything in os before first
         # digit-led token (e.g. "FortiOS 7.4.2" → "FortiOS").

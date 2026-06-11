@@ -621,15 +621,26 @@ async def run_tenant_scan(tenant_id: str, tenant_name: str):
 # ---------------------------------------------------------------------------
 
 _global_scan_state: dict = {
-    "status": "idle",      # idle | running | complete | error
+    "status": "idle",           # idle | running | complete | error
     "phase": "",
+    # inventory
     "devices_fetched": 0,
     "total_devices": 0,
-    "unique_combos": 0,
+    "physical_devices": 0,
+    "virtual_machines": 0,
+    "no_platform_count": 0,     # devices skipped (missing platform/version)
+    # dedup
+    "unique_platforms": 0,      # distinct OS/platform names
+    "unique_combos": 0,         # distinct platform+version pairs
+    # NVD
     "nvd_queried": 0,
     "nvd_cached": 0,
     "nvd_total": 0,
+    "devices_with_cves": 0,     # after fan-out
+    # save
     "tenants_saved": 0,
+    "total_tenants": 0,
+    # timing
     "started_at": None,
     "completed_at": None,
     "elapsed_seconds": None,
@@ -661,8 +672,11 @@ async def run_global_scan():
     state = _global_scan_state
     state.update({
         "status": "running", "phase": "Fetching device inventory",
-        "devices_fetched": 0, "total_devices": 0, "unique_combos": 0,
-        "nvd_queried": 0, "nvd_cached": 0, "nvd_total": 0, "tenants_saved": 0,
+        "devices_fetched": 0, "total_devices": 0, "physical_devices": 0,
+        "virtual_machines": 0, "no_platform_count": 0,
+        "unique_platforms": 0, "unique_combos": 0,
+        "nvd_queried": 0, "nvd_cached": 0, "nvd_total": 0, "devices_with_cves": 0,
+        "tenants_saved": 0, "total_tenants": 0,
         "started_at": datetime.utcnow().isoformat(), "completed_at": None,
         "elapsed_seconds": None, "phase_timings": {}, "error": None,
     })
@@ -682,6 +696,7 @@ async def run_global_scan():
                 ("device",  f"{NETBOX_URL}/api/dcim/devices/?limit=1000"),
                 ("vm",      f"{NETBOX_URL}/api/virtualization/virtual-machines/?limit=1000"),
             ]:
+                state["phase"] = f"Fetching {'physical devices' if rtype == 'device' else 'virtual machines'} from NetBox"
                 url = base_url
                 page = 1
                 while url:
@@ -691,8 +706,11 @@ async def run_global_scan():
                         data = resp.json()
                         for d in data.get("results", []):
                             d["_rtype"] = rtype
-                        all_devices.extend(data.get("results", []))
+                        batch = data.get("results", [])
+                        all_devices.extend(batch)
                         state["devices_fetched"] = len(all_devices)
+                        state["physical_devices"] = sum(1 for d in all_devices if d.get("_rtype") == "device")
+                        state["virtual_machines"] = sum(1 for d in all_devices if d.get("_rtype") == "vm")
                         await _push_global({"type": "progress", "state": dict(state)})
                         url = data.get("next")
                         page += 1
@@ -711,9 +729,10 @@ async def run_global_scan():
             state["phase"] = "Building platform inventory"
             await _push_global({"type": "progress", "state": dict(state)})
 
-            # combo_map: nvd_query → {"devices": [...raw netbox dicts...]}
+            # combo_map: nvd_query → list of raw netbox device dicts
             combo_map: dict[str, list] = {}
             no_platform: list[dict] = []
+            platform_names: set[str] = set()
 
             for d in all_devices:
                 rtype = d.get("_rtype", "device")
@@ -727,18 +746,22 @@ async def run_global_scan():
                 query = _build_nvd_query(os_name, os_version)
                 if query:
                     combo_map.setdefault(query, []).append(d)
+                    if os_name:
+                        platform_names.add(os_name)
                 else:
                     no_platform.append(d)
 
             state["unique_combos"] = len(combo_map)
+            state["unique_platforms"] = len(platform_names)
+            state["no_platform_count"] = len(no_platform)
             state["phase_timings"]["grouping_seconds"] = round(time.time() - phase_t, 1)
             phase_t = time.time()
-            print(f"🔑 Global scan: {len(combo_map)} unique platform/version combos, {len(no_platform)} without platform data")
+            print(f"🔑 Global scan: {len(combo_map)} unique combos across {len(platform_names)} platforms, {len(no_platform)} without platform data")
 
             # ----------------------------------------------------------------
             # Phase 3 — deduplicated NVD queries via broker
             # ----------------------------------------------------------------
-            state["phase"] = f"Querying NVD for {len(combo_map)} unique platform combos"
+            state["phase"] = f"Querying NVD ({len(combo_map)} unique combos, {len(platform_names)} platforms)"
             state["nvd_total"] = len(combo_map)
             await _push_global({"type": "progress", "state": dict(state)})
 
@@ -747,11 +770,11 @@ async def run_global_scan():
             nvd_results: dict[str, dict] = {}
 
             async def fetch_one(query: str):
+                already_cached = query in cve_cache
                 result = await broker.request_vulnerabilities(query)
                 nvd_results[query] = result
-                was_cached = query in cve_cache or query in broker.processed_requests
                 state["nvd_queried"] += 1
-                if was_cached:
+                if already_cached:
                     state["nvd_cached"] += 1
                 await _push_global({"type": "progress", "state": dict(state)})
 
@@ -808,6 +831,10 @@ async def run_global_scan():
                         continue
                     tenant_names[tid] = tname
                     tenant_devices.setdefault(tid, []).append(_make_record(d, device_cves, highest))
+                    if device_cves:
+                        state["devices_with_cves"] += 1
+
+            state["total_tenants"] = len(tenant_devices)
 
             for d in no_platform:
                 tenant = d.get("tenant") or {}
@@ -817,6 +844,9 @@ async def run_global_scan():
                     continue
                 tenant_names[tid] = tname
                 tenant_devices.setdefault(tid, []).append(_make_record(d, [], 0.0))
+
+            state["phase"] = f"Saving results for {len(tenant_devices)} tenants"
+            await _push_global({"type": "progress", "state": dict(state)})
 
             for tid, devs in tenant_devices.items():
                 devs.sort(key=lambda x: x["highest_severity_score"], reverse=True)
@@ -828,6 +858,8 @@ async def run_global_scan():
                     "bulk_scan": True,
                 })
                 state["tenants_saved"] += 1
+                if state["tenants_saved"] % 10 == 0:
+                    await _push_global({"type": "progress", "state": dict(state)})
 
             state["phase_timings"]["save_seconds"] = round(time.time() - phase_t, 1)
 

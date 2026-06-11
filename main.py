@@ -17,6 +17,7 @@ import redis
 import traceback
 import uvloop
 from llm_interface import vLLMClient
+import db
 
 try:
     import orjson
@@ -112,34 +113,23 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 
 # ---------------------------------------------------------------------------
-# CACHE HELPERS (per-tenant)
+# CACHE HELPERS — thin shims delegating to db module
 # ---------------------------------------------------------------------------
 
-def tenant_results_file(tenant_id: str) -> str:
-    return os.path.join(CACHE_DIR, f"tenant_{tenant_id}_results.json")
-
-def tenant_summary_file(tenant_id: str) -> str:
-    return os.path.join(CACHE_DIR, f"tenant_{tenant_id}_summary.json")
-
 def load_tenant_results(tenant_id: str) -> dict:
-    return load_cache(tenant_results_file(tenant_id))
+    return db.load_tenant_results(tenant_id)
 
 def save_tenant_results(tenant_id: str, data: dict):
-    save_cache(tenant_results_file(tenant_id), data)
+    db.save_tenant_results(tenant_id, data)
 
 def load_tenant_summary(tenant_id: str) -> dict:
-    return load_cache(tenant_summary_file(tenant_id))
+    return db.load_tenant_summary(tenant_id)
 
 def save_tenant_summary(tenant_id: str, data: dict):
-    save_cache(tenant_summary_file(tenant_id), data)
+    db.save_tenant_summary(tenant_id, data)
 
 def get_cache_age_hours(tenant_id: str) -> float | None:
-    """Returns age of tenant cache in hours, or None if no cache exists."""
-    cached = load_tenant_results(tenant_id)
-    if not cached or not cached.get("scanned_at"):
-        return None
-    scanned_at = datetime.fromisoformat(cached["scanned_at"])
-    return (datetime.utcnow() - scanned_at).total_seconds() / 3600
+    return db.get_cache_age_hours(tenant_id)
 
 
 # ---------------------------------------------------------------------------
@@ -867,19 +857,19 @@ async def run_global_scan():
 def _enrich_tenant(t: dict) -> dict:
     """Add local cache metadata to a NetBox tenant dict."""
     tid = str(t["id"])
-    cached = load_tenant_results(tid)
+    row = db.get_tenant(tid)
     scan_st = _scan_state.get(tid, {})
     redis_st = r.hgetall(f"scan:{tid}")
-    status = scan_st.get("status") or redis_st.get("status") or ("complete" if cached.get("scanned_at") else "idle")
-    age_hours = get_cache_age_hours(tid)
+    status = scan_st.get("status") or redis_st.get("status") or ("complete" if row.get("scanned_at") else "idle")
+    age_hours = db.get_cache_age_hours(tid)
     return {
         "id": t["id"],
         "name": t["name"],
         "slug": t.get("slug"),
         "description": t.get("description"),
         "status": status,
-        "last_scan": cached.get("scanned_at"),
-        "device_count": len(cached.get("devices", [])),
+        "last_scan": row.get("scanned_at"),
+        "device_count": row.get("total_devices", 0),
         "cache_age_hours": round(age_hours, 1) if age_hours is not None else None,
         "is_stale": age_hours is not None and age_hours >= CACHE_MAX_AGE_HOURS,
     }
@@ -969,29 +959,25 @@ async def recent_tenants():
     Return tenants that have a local scan cache, sorted by most recently scanned.
     Used to populate the dropdown before the user starts typing.
     """
-    results = []
     try:
-        for fname in os.listdir(CACHE_DIR):
-            if fname.startswith("tenant_") and fname.endswith("_results.json"):
-                tid = fname[len("tenant_"):-len("_results.json")]
-                cached = load_tenant_results(tid)
-                if not cached.get("scanned_at"):
-                    continue
-                results.append({
-                    "id": int(tid) if tid.isdigit() else tid,
-                    "name": cached.get("tenant_name", f"Tenant {tid}"),
-                    "slug": None,
-                    "description": None,
-                    "status": "complete",
-                    "last_scan": cached.get("scanned_at"),
-                    "device_count": len(cached.get("devices", [])),
-                    "cache_age_hours": round(get_cache_age_hours(tid) or 0, 1),
-                    "is_stale": (get_cache_age_hours(tid) or 0) >= CACHE_MAX_AGE_HOURS,
-                })
+        rows = db.list_recent_tenants(limit=200)
+        return [
+            {
+                "id": int(r["tenant_id"]) if str(r["tenant_id"]).isdigit() else r["tenant_id"],
+                "name": r["name"],
+                "slug": None,
+                "description": None,
+                "status": "complete",
+                "last_scan": r["scanned_at"],
+                "device_count": r["total_devices"],
+                "cache_age_hours": round(db.get_cache_age_hours(r["tenant_id"]) or 0, 1),
+                "is_stale": (db.get_cache_age_hours(r["tenant_id"]) or 0) >= CACHE_MAX_AGE_HOURS,
+            }
+            for r in rows
+        ]
     except Exception as e:
         print(f"❌ Error listing recent tenants: {e}")
-    results.sort(key=lambda x: x["last_scan"] or "", reverse=True)
-    return results
+        return []
 
 
 @app.get("/api/tenants")
@@ -1188,6 +1174,15 @@ async def stream_results(tenant_id: str):
     )
 
 
+@app.get("/api/leaderboard")
+async def get_leaderboard(limit: int = 100, min_devices: int = 1):
+    """
+    Return tenants ranked by worst security posture (highest CVE score, then most vulnerable devices).
+    Useful for prioritising remediation across the estate.
+    """
+    return db.get_leaderboard(limit=min(limit, 1000), min_devices=min_devices)
+
+
 # Status endpoint (legacy compat, also used by frontend health check)
 @app.get("/status")
 async def get_status():
@@ -1202,6 +1197,13 @@ async def startup_event():
         print("✅ Redis connected.")
     except Exception as e:
         print(f"⚠️  Redis unavailable: {e}")
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(thread_pool, db.init_db)
+    print("✅ SQLite initialised.")
+    migrated = await loop.run_in_executor(thread_pool, db.migrate_from_json, CACHE_DIR)
+    if migrated:
+        print(f"✅ Imported {migrated} tenant JSON cache(s) into SQLite.")
     print("✅ Ready.")
 
 

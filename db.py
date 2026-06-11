@@ -447,8 +447,12 @@ def get_export_rows(tenant_id: str | None = None) -> list[dict]:
     Return one row per device suitable for Excel export.
     Pass tenant_id to limit to a single tenant, or None for all.
     """
-    where = "WHERE d.tenant_id = ?" if tenant_id else ""
-    params = (tenant_id,) if tenant_id else ()
+    if tenant_id:
+        where = "WHERE d.tenant_id = ? AND d.highest_severity_score > 0"
+        params = (tenant_id,)
+    else:
+        where = "WHERE d.highest_severity_score > 0"
+        params = ()
     rows = _connect().execute(f"""
         SELECT
             t.name                      AS tenant_name,

@@ -912,6 +912,136 @@ async def run_global_scan():
 
 
 # ---------------------------------------------------------------------------
+# LLM BACK-FILL WORKER
+# ---------------------------------------------------------------------------
+
+# Delays (seconds) — tuned to keep vLLM load gentle
+_LLM_WORKER_DEVICE_DELAY  = 3.0    # between individual device calls (non-cache)
+_LLM_WORKER_TENANT_DELAY  = 8.0    # between tenants
+_LLM_WORKER_IDLE_DELAY    = 120.0  # when no pending work
+_LLM_WORKER_ERROR_DELAY   = 30.0   # after an unexpected error
+
+# Max concurrent in-flight LLM calls from this worker
+_llm_worker_sem: asyncio.Semaphore | None = None
+
+
+async def llm_analysis_worker():
+    """
+    Background worker that back-fills LLM analysis for tenants produced by
+    the global bulk scan (which skips per-device and estate-level LLM calls
+    because running 100k+ calls serially would be impractical at scan time).
+
+    For each tenant that needs work it:
+      1. Runs get_llm_analysis() for every vulnerable device whose analysis
+         is still a placeholder string, honouring llm_analysis_cache to avoid
+         duplicate API hits.
+      2. Calls generate_estate_summary() once device analysis is complete
+         (or if only the summary is missing).
+
+    Rate-limited via:
+      - _llm_worker_sem  — caps concurrent LLM calls from this worker
+      - _LLM_WORKER_DEVICE_DELAY  — sleep after each real (non-cache) API call
+      - _LLM_WORKER_TENANT_DELAY  — sleep between tenants
+      - _LLM_WORKER_IDLE_DELAY    — sleep when nothing needs doing
+    """
+    global _llm_worker_sem
+    _llm_worker_sem = asyncio.Semaphore(2)
+
+    # Let startup tasks (Kafka, Redis, DB) settle before we start hammering the LLM
+    await asyncio.sleep(20)
+    print("🤖 LLM back-fill worker started")
+
+    loop = asyncio.get_running_loop()
+
+    while True:
+        try:
+            pending = await loop.run_in_executor(
+                thread_pool, db.get_tenants_needing_analysis, 20
+            )
+
+            if not pending:
+                await asyncio.sleep(_LLM_WORKER_IDLE_DELAY)
+                continue
+
+            print(f"🤖 LLM worker: {len(pending)} tenant(s) need analysis")
+
+            for tenant in pending:
+                tid   = tenant["tenant_id"]
+                tname = tenant["name"]
+                n_dev = tenant["pending_devices"]
+                need_summary = bool(tenant["needs_summary"])
+
+                # Skip if an active per-tenant or global scan is already handling this tenant
+                if tid in _scan_tasks and not _scan_tasks[tid].done():
+                    print(f"  ⏭️  [{tname}] skipping — per-tenant scan in progress")
+                    continue
+                if _global_scan_state.get("status") == "running":
+                    print(f"  ⏭️  [{tname}] skipping — global scan in progress")
+                    break  # don't touch anything while global scan runs; retry later
+
+                print(f"  🔬 [{tname}] {n_dev} device(s) to analyse, summary={'needed' if need_summary else 'exists'}")
+
+                # Load full device data once (need CVEs)
+                results = await loop.run_in_executor(thread_pool, db.load_tenant_results, tid)
+                devices = results.get("devices", [])
+                devices_by_name = {d["resource_name"]: d for d in devices}
+
+                # ── Step 1: per-device LLM analysis ──────────────────────────
+                stubs = await loop.run_in_executor(thread_pool, db.get_devices_needing_llm, tid)
+                analyzed = 0
+
+                for stub in stubs:
+                    dname = stub["resource_name"]
+                    dev   = devices_by_name.get(dname)
+                    if not dev or not dev.get("cves"):
+                        continue
+
+                    cves     = dev["cves"]
+                    cve_key  = f"{dname}-{'-'.join(sorted(c['id'] for c in cves))}"
+                    from_cache = cve_key in llm_analysis_cache
+
+                    if from_cache:
+                        analysis = llm_analysis_cache[cve_key]
+                        print(f"    ⚡ [{tname}] cache hit: {dname}")
+                    else:
+                        print(f"    🤖 [{tname}] analysing {dname} ({len(cves)} CVE(s), score {stub['highest_severity_score']:.1f})…")
+                        async with _llm_worker_sem:
+                            analysis = await get_llm_analysis(
+                                dname,
+                                dev.get("resource_type", "Unknown"),
+                                dev.get("os", "Unknown"),
+                                cves,
+                            )
+                        llm_analysis_cache[cve_key] = analysis
+                        save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)
+                        await asyncio.sleep(_LLM_WORKER_DEVICE_DELAY)
+
+                    await loop.run_in_executor(
+                        thread_pool, db.update_device_llm_analysis, tid, dname, analysis
+                    )
+                    # Update local copy so estate summary sees the fresh text
+                    if dname in devices_by_name:
+                        devices_by_name[dname]["llm_analysis"] = analysis
+                    analyzed += 1
+
+                if analyzed:
+                    print(f"  ✅ [{tname}] {analyzed} device(s) analysed")
+
+                # ── Step 2: estate-level summary ─────────────────────────────
+                if need_summary or analyzed > 0:
+                    # Rebuild device list with fresh llm_analysis values
+                    fresh_devices = list(devices_by_name.values())
+                    await generate_estate_summary(tid, tname, fresh_devices)
+
+                await asyncio.sleep(_LLM_WORKER_TENANT_DELAY)
+
+        except Exception as e:
+            print(f"❌ LLM back-fill worker error: {e}")
+            traceback.print_exc()
+            await asyncio.sleep(_LLM_WORKER_ERROR_DELAY)
+
+
+# ---------------------------------------------------------------------------
 # API ENDPOINTS
 # ---------------------------------------------------------------------------
 
@@ -1378,6 +1508,9 @@ async def startup_event():
     migrated = await loop.run_in_executor(thread_pool, db.migrate_from_json, CACHE_DIR)
     if migrated:
         print(f"✅ Imported {migrated} tenant JSON cache(s) into SQLite.")
+
+    asyncio.create_task(llm_analysis_worker())
+    print("✅ LLM back-fill worker scheduled.")
     print("✅ Ready.")
 
 

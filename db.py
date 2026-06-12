@@ -439,6 +439,87 @@ def get_severity_breakdown() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# LLM back-fill helpers
+# ---------------------------------------------------------------------------
+
+# Placeholder text set by the global scan — signals that real analysis is needed.
+_PENDING_ANALYSIS_PLACEHOLDERS = frozenset({
+    'Vulnerabilities found — open this tenant for AI analysis.',
+    'Analyzing vulnerabilities...',
+    'Scanning...',
+})
+
+
+def get_tenants_needing_analysis(limit: int = 20) -> list[dict]:
+    """
+    Return tenants that need LLM back-fill work: either they have no estate
+    summary yet, or they have vulnerable devices whose analysis is still a
+    placeholder string from the bulk scan.
+    Ordered by most vulnerable devices first so critical clients get attention
+    before smaller ones.
+    """
+    placeholders = tuple(_PENDING_ANALYSIS_PLACEHOLDERS)
+    ph_sql = ','.join('?' * len(placeholders))
+    rows = _connect().execute(f"""
+        SELECT
+            t.tenant_id,
+            t.name,
+            t.total_devices,
+            t.vulnerable_devices,
+            CASE WHEN s.risk_posture IS NULL THEN 1 ELSE 0 END AS needs_summary,
+            (
+                SELECT COUNT(*) FROM devices d
+                WHERE d.tenant_id = t.tenant_id
+                  AND d.is_vulnerable = 1
+                  AND (d.llm_analysis IS NULL OR d.llm_analysis IN ({ph_sql}))
+            ) AS pending_devices
+        FROM tenants t
+        LEFT JOIN summaries s ON t.tenant_id = s.tenant_id
+        WHERE t.scanned_at IS NOT NULL
+          AND t.total_devices > 0
+          AND (
+              s.risk_posture IS NULL
+              OR (
+                  SELECT COUNT(*) FROM devices d
+                  WHERE d.tenant_id = t.tenant_id
+                    AND d.is_vulnerable = 1
+                    AND (d.llm_analysis IS NULL OR d.llm_analysis IN ({ph_sql}))
+              ) > 0
+          )
+        ORDER BY t.vulnerable_devices DESC, t.scanned_at DESC
+        LIMIT ?
+    """, (*placeholders, *placeholders, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_devices_needing_llm(tenant_id: str) -> list[dict]:
+    """Return vulnerable devices for a tenant whose LLM analysis is still a placeholder."""
+    placeholders = tuple(_PENDING_ANALYSIS_PLACEHOLDERS)
+    ph_sql = ','.join('?' * len(placeholders))
+    rows = _connect().execute(f"""
+        SELECT d.id, d.resource_name, d.resource_type, d.os,
+               d.platform_name, d.os_version, d.highest_severity_score
+        FROM devices d
+        WHERE d.tenant_id = ?
+          AND d.is_vulnerable = 1
+          AND (d.llm_analysis IS NULL OR d.llm_analysis IN ({ph_sql}))
+        ORDER BY d.highest_severity_score DESC
+    """, (tenant_id, *placeholders)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_device_llm_analysis(tenant_id: str, resource_name: str, llm_analysis: str):
+    """Update the LLM analysis text for a single device row."""
+    conn = _connect()
+    with _write_lock:
+        conn.execute(
+            "UPDATE devices SET llm_analysis = ? WHERE tenant_id = ? AND resource_name = ?",
+            (llm_analysis, tenant_id, resource_name),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
 # Export data
 # ---------------------------------------------------------------------------
 

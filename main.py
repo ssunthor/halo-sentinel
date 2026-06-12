@@ -6,6 +6,7 @@ import re
 import os
 import urllib.parse
 import math
+from collections import deque
 from fastapi import FastAPI, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -673,6 +674,52 @@ _global_scan_task: asyncio.Task | None = None
 _global_sse_subscribers: list[asyncio.Queue] = []
 
 
+# ---------------------------------------------------------------------------
+# AI WORKER STATS — updated in-place by llm_analysis_worker
+# ---------------------------------------------------------------------------
+_ai_stats: dict = {
+    "status":           "starting",   # starting | idle | analyzing | error
+    "current_tenant":   None,
+    "current_device":   None,
+    "pending_tenants":  0,
+    "pending_devices":  0,
+    "total_analyzed":   0,            # devices with real analysis written since startup
+    "total_api_calls":  0,            # actual vLLM API calls (no cache)
+    "total_cache_hits": 0,
+    "total_errors":     0,
+    "avg_latency_ms":   None,         # rolling avg over last 100 real calls
+    "min_latency_ms":   None,         # session min
+    "max_latency_ms":   None,         # session max
+    "p95_latency_ms":   None,         # 95th-percentile over last 100 calls
+    "started_at":       None,
+    "last_activity":    None,
+    "analyzed_last_24h": 0,           # recomputed each iteration
+}
+# ring buffers — not serialised to the endpoint directly
+_ai_latency_window: deque = deque(maxlen=100)   # ms values for rolling stats
+_ai_completion_ts:  deque = deque()              # ISO timestamps; pruned to 24 h
+
+
+def _update_ai_latency(ms: float):
+    global _ai_stats
+    _ai_latency_window.append(ms)
+    win = list(_ai_latency_window)
+    win_sorted = sorted(win)
+    _ai_stats["avg_latency_ms"]  = round(sum(win) / len(win))
+    _ai_stats["min_latency_ms"]  = round(min(win_sorted))
+    _ai_stats["max_latency_ms"]  = round(max(win_sorted))
+    p95_idx = max(0, int(len(win_sorted) * 0.95) - 1)
+    _ai_stats["p95_latency_ms"]  = round(win_sorted[p95_idx])
+
+
+def _prune_completion_ts():
+    """Remove completion timestamps older than 24 h and update analyzed_last_24h."""
+    cutoff = time.time() - 86400
+    while _ai_completion_ts and _ai_completion_ts[0] < cutoff:
+        _ai_completion_ts.popleft()
+    _ai_stats["analyzed_last_24h"] = len(_ai_completion_ts)
+
+
 async def _push_global(msg: dict):
     dead = []
     for q in _global_sse_subscribers:
@@ -947,6 +994,8 @@ async def llm_analysis_worker():
     global _llm_worker_sem
     _llm_worker_sem = asyncio.Semaphore(2)
 
+    _ai_stats["started_at"] = datetime.utcnow().isoformat()
+
     # Let startup tasks (Kafka, Redis, DB) settle before we start hammering the LLM
     await asyncio.sleep(20)
     print("🤖 LLM back-fill worker started")
@@ -955,11 +1004,20 @@ async def llm_analysis_worker():
 
     while True:
         try:
+            _prune_completion_ts()
+
             pending = await loop.run_in_executor(
                 thread_pool, db.get_tenants_needing_analysis, 20
             )
 
+            # Update queue depth stats
+            _ai_stats["pending_tenants"] = len(pending)
+            _ai_stats["pending_devices"] = sum(t.get("pending_devices", 0) for t in pending)
+
             if not pending:
+                _ai_stats["status"] = "idle"
+                _ai_stats["current_tenant"] = None
+                _ai_stats["current_device"] = None
                 await asyncio.sleep(_LLM_WORKER_IDLE_DELAY)
                 continue
 
@@ -979,6 +1037,8 @@ async def llm_analysis_worker():
                     print(f"  ⏭️  [{tname}] skipping — global scan in progress")
                     break  # don't touch anything while global scan runs; retry later
 
+                _ai_stats["status"] = "analyzing"
+                _ai_stats["current_tenant"] = tname
                 print(f"  🔬 [{tname}] {n_dev} device(s) to analyse, summary={'needed' if need_summary else 'exists'}")
 
                 # Load full device data once (need CVEs)
@@ -1000,11 +1060,15 @@ async def llm_analysis_worker():
                     cve_key  = f"{dname}-{'-'.join(sorted(c['id'] for c in cves))}"
                     from_cache = cve_key in llm_analysis_cache
 
+                    _ai_stats["current_device"] = dname
+
                     if from_cache:
                         analysis = llm_analysis_cache[cve_key]
+                        _ai_stats["total_cache_hits"] += 1
                         print(f"    ⚡ [{tname}] cache hit: {dname}")
                     else:
                         print(f"    🤖 [{tname}] analysing {dname} ({len(cves)} CVE(s), score {stub['highest_severity_score']:.1f})…")
+                        t0 = time.time()
                         async with _llm_worker_sem:
                             analysis = await get_llm_analysis(
                                 dname,
@@ -1012,6 +1076,10 @@ async def llm_analysis_worker():
                                 dev.get("os", "Unknown"),
                                 cves,
                             )
+                        elapsed_ms = round((time.time() - t0) * 1000)
+                        _ai_stats["total_api_calls"] += 1
+                        _update_ai_latency(elapsed_ms)
+                        print(f"      ↳ {elapsed_ms}ms")
                         llm_analysis_cache[cve_key] = analysis
                         save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)
                         await asyncio.sleep(_LLM_WORKER_DEVICE_DELAY)
@@ -1022,6 +1090,11 @@ async def llm_analysis_worker():
                     # Update local copy so estate summary sees the fresh text
                     if dname in devices_by_name:
                         devices_by_name[dname]["llm_analysis"] = analysis
+
+                    _ai_stats["total_analyzed"] += 1
+                    _ai_stats["last_activity"] = datetime.utcnow().isoformat()
+                    _ai_completion_ts.append(time.time())
+                    _prune_completion_ts()
                     analyzed += 1
 
                 if analyzed:
@@ -1029,13 +1102,17 @@ async def llm_analysis_worker():
 
                 # ── Step 2: estate-level summary ─────────────────────────────
                 if need_summary or analyzed > 0:
-                    # Rebuild device list with fresh llm_analysis values
+                    _ai_stats["current_device"] = "(estate summary)"
                     fresh_devices = list(devices_by_name.values())
                     await generate_estate_summary(tid, tname, fresh_devices)
 
+                _ai_stats["current_device"] = None
                 await asyncio.sleep(_LLM_WORKER_TENANT_DELAY)
 
         except Exception as e:
+            _ai_stats["status"] = "error"
+            _ai_stats["total_errors"] += 1
+            _ai_stats["current_device"] = None
             print(f"❌ LLM back-fill worker error: {e}")
             traceback.print_exc()
             await asyncio.sleep(_LLM_WORKER_ERROR_DELAY)
@@ -1392,6 +1469,19 @@ def _xlsx_str(v) -> str | None:
     if v is None:
         return None
     return _ILLEGAL_CHARS_RE.sub('', str(v))
+
+
+@app.get("/api/ai/stats")
+async def get_ai_stats():
+    """Return live LLM back-fill worker metrics."""
+    _prune_completion_ts()
+    total_calls = _ai_stats["total_api_calls"] + _ai_stats["total_cache_hits"]
+    cache_rate = round(100 * _ai_stats["total_cache_hits"] / total_calls, 1) if total_calls else None
+    return {
+        **_ai_stats,
+        "cache_hit_rate_pct": cache_rate,
+        "total_llm_calls": total_calls,
+    }
 
 
 def _build_excel(rows: list) -> bytes:

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Shield, TrendingUp, TrendingDown, Minus, RefreshCw, Download,
   ChevronUp, ChevronDown, Search, X, AlertTriangle, Activity,
-  Server, Layers, Bug,
+  Server, Layers, Bug, Cpu, Zap, Clock, CheckCircle2, DatabaseZap,
+  BarChart3, ListTodo,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -202,6 +203,129 @@ const ThBtn = ({ children, field, current, dir, onSort }) => (
 );
 
 // ---------------------------------------------------------------------------
+// AI Worker Stats panel
+// ---------------------------------------------------------------------------
+const STATUS_CFG = {
+  starting:  { dot: 'bg-yellow-400 animate-pulse', label: 'Starting',  text: 'text-yellow-400' },
+  idle:      { dot: 'bg-gray-500',                 label: 'Idle',       text: 'text-gray-400'   },
+  analyzing: { dot: 'bg-green-400 animate-pulse',  label: 'Analyzing',  text: 'text-green-400'  },
+  error:     { dot: 'bg-red-500',                  label: 'Error',      text: 'text-red-400'    },
+};
+
+const fmtMs = (ms) => {
+  if (ms == null) return '—';
+  if (ms >= 60000) return `${(ms / 60000).toFixed(1)}m`;
+  if (ms >= 1000)  return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
+};
+
+const MiniStat = ({ icon: Icon, label, value, accent = 'text-white', title }) => (
+  <div className="flex flex-col gap-0.5" title={title}>
+    <div className="flex items-center gap-1 text-[10px] text-gray-500 uppercase tracking-wider">
+      {Icon && <Icon size={9} />}{label}
+    </div>
+    <div className={`font-mono font-bold text-sm ${accent}`}>{value ?? '—'}</div>
+  </div>
+);
+
+const AiStatsPanel = ({ apiBase }) => {
+  const [ai, setAi] = useState(null);
+
+  useEffect(() => {
+    let cancel = false;
+    const poll = async () => {
+      try {
+        const r = await fetch(`${apiBase}/api/ai/stats`);
+        if (r.ok && !cancel) setAi(await r.json());
+      } catch {}
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => { cancel = true; clearInterval(t); };
+  }, [apiBase]);
+
+  if (!ai) return null;
+
+  const cfg = STATUS_CFG[ai.status] || STATUS_CFG.idle;
+  const totalCalls = ai.total_llm_calls || 0;
+  const cacheRate  = ai.cache_hit_rate_pct;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Cpu size={13} className="text-purple-400" />
+          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">AI Analysis Engine</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
+          <span className={`text-xs font-semibold ${cfg.text}`}>{cfg.label}</span>
+        </div>
+      </div>
+
+      {/* Current job */}
+      {ai.status === 'analyzing' && (
+        <div className="mb-4 bg-purple-900/20 border border-purple-500/30 rounded-lg px-3 py-2 text-xs">
+          <div className="text-purple-300 font-semibold truncate">
+            {ai.current_device && ai.current_device !== '(estate summary)'
+              ? <>Analyzing <span className="font-mono">{ai.current_device}</span></>
+              : ai.current_device === '(estate summary)'
+              ? 'Generating estate summary…'
+              : 'Processing…'}
+          </div>
+          {ai.current_tenant && (
+            <div className="text-purple-500 text-[10px] mt-0.5 truncate">{ai.current_tenant}</div>
+          )}
+        </div>
+      )}
+
+      {/* Stats grid */}
+      <div className="grid grid-cols-3 gap-x-4 gap-y-3 mb-4">
+        <MiniStat icon={BarChart3}  label="Analyzed (24h)"   value={(ai.analyzed_last_24h ?? 0).toLocaleString()} accent="text-green-400" />
+        <MiniStat icon={ListTodo}   label="In queue"          value={(ai.pending_devices ?? 0).toLocaleString()}   accent={ai.pending_devices > 0 ? 'text-yellow-400' : 'text-gray-400'} />
+        <MiniStat icon={Server}     label="Tenants pending"   value={(ai.pending_tenants ?? 0).toLocaleString()}   />
+        <MiniStat icon={Activity}   label="Session total"     value={(ai.total_analyzed ?? 0).toLocaleString()}    accent="text-purple-400" />
+        <MiniStat icon={Zap}        label="API calls"         value={(ai.total_api_calls ?? 0).toLocaleString()}   />
+        <MiniStat icon={DatabaseZap} label="Cache hits"       value={(ai.total_cache_hits ?? 0).toLocaleString()}  accent="text-blue-400" />
+      </div>
+
+      {/* Latency row */}
+      <div className="border-t border-gray-800 pt-3 grid grid-cols-4 gap-2">
+        <MiniStat icon={Clock} label="Avg latency"  value={fmtMs(ai.avg_latency_ms)}  accent="text-cyan-400" title="Rolling avg of last 100 real API calls" />
+        <MiniStat label="P95"      value={fmtMs(ai.p95_latency_ms)} title="95th percentile latency" />
+        <MiniStat label="Min"      value={fmtMs(ai.min_latency_ms)} accent="text-green-400" />
+        <MiniStat label="Max"      value={fmtMs(ai.max_latency_ms)} accent={ai.max_latency_ms > 30000 ? 'text-red-400' : 'text-gray-300'} />
+      </div>
+
+      {/* Cache rate bar */}
+      {totalCalls > 0 && (
+        <div className="mt-3 pt-3 border-t border-gray-800">
+          <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+            <span>Cache hit rate</span>
+            <span className="text-blue-400 font-mono">{cacheRate ?? 0}%</span>
+          </div>
+          <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
+            <div className="bg-blue-500 h-full rounded-full transition-all duration-700" style={{ width: `${cacheRate ?? 0}%` }} />
+          </div>
+          <div className="flex justify-between text-[10px] text-gray-700 mt-1">
+            <span>{(ai.total_cache_hits ?? 0).toLocaleString()} cached</span>
+            <span>{(ai.total_api_calls ?? 0).toLocaleString()} API calls</span>
+          </div>
+        </div>
+      )}
+
+      {ai.total_errors > 0 && (
+        <div className="mt-2 text-[10px] text-red-400 flex items-center gap-1">
+          <AlertTriangle size={9} /> {ai.total_errors} error(s) this session
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function Leaderboard({ apiBase, onSelectTenant }) {
@@ -343,10 +467,11 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
           </div>
 
           {/* ── Info panels ── */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             <SeverityPanel breakdown={stats?.severity_breakdown} />
             <PlatformPanel platforms={stats?.top_platforms} />
             <TopCvesPanel cves={stats?.top_cves} />
+            <AiStatsPanel apiBase={apiBase} />
           </div>
 
           {/* ── Leaderboard table ── */}

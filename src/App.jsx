@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp } from 'lucide-react';
+import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp, ScrollText } from 'lucide-react';
 import NetboxVulnerabilities from './components/NetboxVulnerabilities';
 import Leaderboard from './components/Leaderboard';
+import ChangelogViewer from './components/ChangelogViewer';
 import { InfoTip } from './components/Tooltip';
 
 const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
@@ -391,8 +392,57 @@ const TenantSelector = ({ selectedTenant, onSelect }) => {
 // ---------------------------------------------------------------------------
 // APP SHELL
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// CHANGELOG MODAL
+// ---------------------------------------------------------------------------
+const ChangelogModal = ({ onClose, apiBase }) => {
+  const [versions, setVersions] = useState(null);
+
+  useEffect(() => {
+    fetch(`${apiBase}/api/changelog`)
+      .then(r => r.ok ? r.json() : [])
+      .then(setVersions)
+      .catch(() => setVersions([]));
+  }, [apiBase]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-gray-950 border border-gray-800 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <ScrollText size={15} className="text-green-400" />
+            <span className="text-sm font-bold text-white tracking-wide">What's New</span>
+            <span className="text-[10px] text-gray-500 uppercase tracking-widest">Defense Halo Customer CVE Analyzer</span>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+        {/* Body */}
+        <div className="overflow-y-auto flex-grow px-5 py-4">
+          {versions === null ? (
+            <div className="flex items-center justify-center py-12 gap-2 text-gray-500 text-sm">
+              <RefreshCw size={14} className="animate-spin" /> Loading…
+            </div>
+          ) : (
+            <ChangelogViewer versions={versions} isPopup />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// APP SHELL
+// ---------------------------------------------------------------------------
 export default function App() {
   const [selectedTenant, setSelectedTenant] = useState(null);
+  const [showChangelog, setShowChangelog] = useState(false);
 
   return (
     <div className="min-h-screen bg-black text-white" style={{ fontFamily: 'monospace' }}>
@@ -410,6 +460,15 @@ export default function App() {
           </div>
 
           <div className="flex-grow" />
+
+          <button
+            onClick={() => setShowChangelog(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-gray-700 bg-gray-900 text-gray-400 hover:text-green-400 hover:border-green-500/40 transition-colors flex-shrink-0"
+            title="What's New"
+          >
+            <ScrollText size={13} />
+            <span className="hidden sm:inline">What's New</span>
+          </button>
 
           <GlobalScanPanel apiBase={apiBase} />
 
@@ -432,6 +491,11 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* CHANGELOG MODAL */}
+      {showChangelog && (
+        <ChangelogModal apiBase={apiBase} onClose={() => setShowChangelog(false)} />
+      )}
     </div>
   );
 }

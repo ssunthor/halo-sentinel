@@ -502,6 +502,21 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
         return err_res
 
 
+def _netbox_next(next_url: str | None) -> str | None:
+    """Rewrite the host/scheme of a NetBox pagination 'next' URL to match NETBOX_URL.
+
+    NetBox constructs 'next' from its own configured base URL, which may differ
+    from the internal URL used inside Kubernetes. Keeping only the path+query
+    from NetBox's response and prepending our configured NETBOX_URL ensures
+    pagination works across all network environments.
+    """
+    if not next_url:
+        return None
+    parsed = urllib.parse.urlparse(next_url)
+    base   = urllib.parse.urlparse(NETBOX_URL)
+    return urllib.parse.urlunparse(parsed._replace(scheme=base.scheme, netloc=base.netloc))
+
+
 async def run_tenant_scan(tenant_id: str, tenant_name: str):
     """Full scan for both devices and VMs for the given tenant. Updates _scan_state and pushes to _scan_queues."""
     global cve_cache, llm_analysis_cache
@@ -544,7 +559,7 @@ async def run_tenant_scan(tenant_id: str, tenant_name: str):
                                 d["_resource_type"] = resource_type
                             all_devices.extend(results)
                             print(f"    ✅ Page {page}: {len(results)} {resource_type}s (total {len(all_devices)})")
-                            url = data.get("next")
+                            url = _netbox_next(data.get("next"))
                             page += 1
                         else:
                             print(f"    ❌ Error fetching {resource_type}s: {resp.status_code}")
@@ -782,7 +797,7 @@ async def run_global_scan():
                         state["physical_devices"] = sum(1 for d in all_devices if d.get("_rtype") == "device")
                         state["virtual_machines"] = sum(1 for d in all_devices if d.get("_rtype") == "vm")
                         await _push_global({"type": "progress", "state": dict(state)})
-                        url = data.get("next")
+                        url = _netbox_next(data.get("next"))
                         page += 1
                     except Exception as e:
                         print(f"  ❌ Global scan page {page} ({rtype}): {e}")

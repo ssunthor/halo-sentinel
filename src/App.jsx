@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp } from 'lucide-react';
 import NetboxVulnerabilities from './components/NetboxVulnerabilities';
 import Leaderboard from './components/Leaderboard';
+import { InfoTip } from './components/Tooltip';
 
 const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
 
@@ -24,9 +25,12 @@ const fmtSecs = (s) => {
   return sec > 0 ? `${m}m ${sec}s` : `${m}m`;
 };
 
-const StatBox = ({ label, value, sub, highlight }) => (
+const StatBox = ({ label, value, sub, highlight, tooltip }) => (
   <div className="bg-gray-800 rounded-lg px-3 py-2">
-    <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">{label}</div>
+    <div className="flex items-center gap-1 text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">
+      {label}
+      {tooltip && <InfoTip content={tooltip} position="bottom" size={10} />}
+    </div>
     <div className={`font-mono font-bold text-sm ${highlight ? 'text-green-400' : 'text-white'}`}>{value}</div>
     {sub && <div className="text-[10px] text-gray-500 mt-0.5">{sub}</div>}
   </div>
@@ -126,25 +130,34 @@ const GlobalScanPanel = ({ apiBase }) => {
           {/* ── Inventory ── */}
           <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">Inventory</div>
           <div className="grid grid-cols-3 gap-2 mb-4">
-            <StatBox label="Total devices" value={(scanState.total_devices || scanState.devices_fetched || 0).toLocaleString()} />
-            <StatBox label="Physical" value={(scanState.physical_devices || 0).toLocaleString()} />
-            <StatBox label="Virtual machines" value={(scanState.virtual_machines || 0).toLocaleString()} />
+            <StatBox label="Total devices" value={(scanState.total_devices || scanState.devices_fetched || 0).toLocaleString()}
+              tooltip="All physical devices and virtual machines fetched from NetBox across the entire instance, regardless of tenant assignment." />
+            <StatBox label="Physical" value={(scanState.physical_devices || 0).toLocaleString()}
+              tooltip="Physical network devices from NetBox DCIM — routers, switches, firewalls, servers, and other hardware." />
+            <StatBox label="Virtual machines" value={(scanState.virtual_machines || 0).toLocaleString()}
+              tooltip="Virtual machines from NetBox Virtualization. Their OS version is read from the os_version custom field rather than os_build." />
           </div>
 
           {/* ── Platform breakdown ── */}
           <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">Platform Analysis</div>
           <div className="grid grid-cols-3 gap-2 mb-4">
-            <StatBox label="OS platforms" value={(scanState.unique_platforms || 0).toLocaleString()} sub="distinct OS types" />
-            <StatBox label="Version combos" value={(scanState.unique_combos || 0).toLocaleString()} sub="unique NVD queries" />
-            <StatBox label="No platform data" value={(scanState.no_platform_count || 0).toLocaleString()} sub="skipped" />
+            <StatBox label="OS platforms" value={(scanState.unique_platforms || 0).toLocaleString()} sub="distinct OS types"
+              tooltip="Number of distinct operating system platform names found across all devices (e.g. FortiOS, IOS XE, Ubuntu). Each platform may have multiple firmware versions." />
+            <StatBox label="Version combos" value={(scanState.unique_combos || 0).toLocaleString()} sub="unique NVD queries"
+              tooltip="Unique platform + version combinations. This equals the number of NVD API calls required — all devices sharing the same platform and version share one query, dramatically reducing API usage." />
+            <StatBox label="No platform data" value={(scanState.no_platform_count || 0).toLocaleString()} sub="skipped"
+              tooltip="Devices skipped during CVE lookup because NetBox has no platform or OS version configured. These devices may have undetected vulnerabilities and should be updated in NetBox." />
           </div>
 
           {/* ── NVD queries ── */}
           <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">NVD Queries</div>
           <div className="grid grid-cols-3 gap-2 mb-2">
-            <StatBox label="Completed" value={(scanState.nvd_queried || 0).toLocaleString()} highlight={scanState.nvd_queried > 0} />
-            <StatBox label="Waiting" value={Math.max(0, (scanState.nvd_total || 0) - (scanState.nvd_queried || 0)).toLocaleString()} />
-            <StatBox label="Cache hits" value={(scanState.nvd_cached || 0).toLocaleString()} sub="no API call needed" />
+            <StatBox label="Completed" value={(scanState.nvd_queried || 0).toLocaleString()} highlight={scanState.nvd_queried > 0}
+              tooltip="NVD queries that have received a response, either from a live API call or from the local CVE cache." />
+            <StatBox label="Waiting" value={Math.max(0, (scanState.nvd_total || 0) - (scanState.nvd_queried || 0)).toLocaleString()}
+              tooltip="NVD queries still in the queue. The broker processes one query every 10 seconds to comply with NIST rate limits." />
+            <StatBox label="Cache hits" value={(scanState.nvd_cached || 0).toLocaleString()} sub="no API call needed"
+              tooltip="Queries answered instantly from the local CVE cache — no NVD API call was required. Cache is persisted to disk and reused across scans." />
           </div>
           {scanState.nvd_total > 0 && (
             <div className="mb-4">
@@ -160,12 +173,13 @@ const GlobalScanPanel = ({ apiBase }) => {
           {/* ── Results ── */}
           <div className="mb-1 text-[10px] font-bold text-gray-600 uppercase tracking-widest">Results</div>
           <div className="grid grid-cols-2 gap-2 mb-4">
-            <StatBox label="Devices with CVEs" value={(scanState.devices_with_cves || 0).toLocaleString()} highlight={scanState.devices_with_cves > 0} />
+            <StatBox label="Devices with CVEs" value={(scanState.devices_with_cves || 0).toLocaleString()} highlight={scanState.devices_with_cves > 0}
+              tooltip="Total number of devices across all tenants where at least one CVE was matched by the NVD API. Devices with no platform data are excluded from CVE lookup." />
             <StatBox
               label="Tenants saved"
               value={`${(scanState.tenants_saved || 0).toLocaleString()} / ${(scanState.total_tenants || 0).toLocaleString()}`}
               sub={scanState.total_tenants > 0 ? `${savePct}%` : ''}
-            />
+              tooltip="Tenant scan results written to the database. Results are saved incrementally — each tenant is persisted as soon as all its devices have been processed, so partial results are available before the scan completes." />
           </div>
 
           {/* ── Timing ── */}

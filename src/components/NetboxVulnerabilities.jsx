@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Clock, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { InfoTip } from './Tooltip';
 
 // ---------------------------------------------------------------------------
 // SEVERITY HELPERS
@@ -73,13 +74,16 @@ const EstateSummaryPanel = ({ summary, tenantName }) => {
           <div className="text-left">
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-white">Estate Risk Assessment</span>
+              <InfoTip content="AI-generated summary of this tenant's overall security posture. The LLM analyzes the full CVE list, device count, severity distribution, and (if available) the previous scan's results to produce this assessment." position="bottom" />
               <span className={`text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded ${style.text} border ${style.border}`}>
                 {summary.risk_posture || 'Unknown'}
               </span>
+              <InfoTip content="Overall risk posture: Critical (9.0+), High (7.0+), Medium (4.0+), Low (<4.0), or Clean (no CVEs). Determined by the LLM based on the severity and breadth of vulnerabilities across the estate." position="bottom" />
               {summary.trend && summary.trend !== 'new_scan' && (
                 <span className="flex items-center gap-1 text-xs text-gray-400">
                   <TrendIcon trend={summary.trend} />
                   {summary.trend}
+                  <InfoTip content="Risk trend compared to the previous scan. Improving = fewer or lower-severity CVEs, Declining = more or higher-severity CVEs, Stable = no significant change." position="bottom" />
                 </span>
               )}
             </div>
@@ -102,15 +106,24 @@ const EstateSummaryPanel = ({ summary, tenantName }) => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
             {/* Stat cards */}
             <div className="bg-black/30 rounded-lg p-3 border border-gray-800">
-              <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total Scanned</div>
+              <div className="flex items-center gap-1 text-xs text-gray-500 uppercase tracking-wider mb-1">
+                Total Scanned
+                <InfoTip content="Total physical devices and VMs in NetBox for this tenant that were included in the CVE scan." position="bottom" size={10} />
+              </div>
               <div className="text-2xl font-black text-white">{summary.total_device_count ?? '—'}</div>
             </div>
             <div className="bg-black/30 rounded-lg p-3 border border-gray-800">
-              <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Vulnerable</div>
+              <div className="flex items-center gap-1 text-xs text-gray-500 uppercase tracking-wider mb-1">
+                Vulnerable
+                <InfoTip content="Devices where the NVD API returned at least one CVE match. Devices without a configured platform or OS version are excluded from CVE lookup." position="bottom" size={10} />
+              </div>
               <div className={`text-2xl font-black ${style.text}`}>{summary.vulnerable_device_count ?? '—'}</div>
             </div>
             <div className="bg-black/30 rounded-lg p-3 border border-gray-800">
-              <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Max CVE Score</div>
+              <div className="flex items-center gap-1 text-xs text-gray-500 uppercase tracking-wider mb-1">
+                Max CVE Score
+                <InfoTip content="Highest CVSS v3 base score found on any device in this tenant's estate. CVSS scores range from 0.0 to 10.0 — scores of 9.0+ are Critical severity." position="bottom" size={10} />
+              </div>
               <div className={`text-2xl font-black ${getSeverityTextClass(summary.max_severity_score)}`}>
                 {summary.max_severity_score != null ? summary.max_severity_score.toFixed(1) : '—'}
               </div>
@@ -120,7 +133,10 @@ const EstateSummaryPanel = ({ summary, tenantName }) => {
           {/* Top CVEs */}
           {summary.top_cves && summary.top_cves.length > 0 && (
             <div>
-              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Top CVEs Across Estate</h4>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                Top CVEs Across Estate
+                <InfoTip content="The highest-scoring CVEs found on any device in this estate. Click any CVE ID to open the full NIST NVD detail page showing technical description, affected versions, and patch references." position="right" />
+              </h4>
               <div className="space-y-1.5">
                 {summary.top_cves.map((cve, i) => (
                   <div key={i} className="flex items-center gap-3 bg-black/20 rounded-lg px-3 py-2 border border-gray-800">
@@ -150,7 +166,10 @@ const EstateSummaryPanel = ({ summary, tenantName }) => {
           {/* Recommendations */}
           {summary.recommendations && summary.recommendations.length > 0 && (
             <div>
-              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Prioritized Recommendations</h4>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                Prioritized Recommendations
+                <InfoTip content="AI-generated remediation steps ranked by urgency. Based on CVE severity scores, the number of affected devices, and exploitability factors from the NVD data." position="right" />
+              </h4>
               <ol className="space-y-1.5">
                 {summary.recommendations.map((rec, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
@@ -416,6 +435,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
             <span className="text-sm font-bold text-green-500 uppercase tracking-widest flex items-center gap-2">
               <div className="w-2 h-2 bg-green-500 rounded-full animate-ping" />
               {scanStatus === 'refreshing' ? 'Refreshing scan in background...' : 'Vulnerability Scan in Progress...'}
+              <InfoTip content={scanStatus === 'refreshing' ? 'A background rescan is running. Stale results are shown now — the device list will update as new results stream in.' : 'Devices are being queried against the NIST NVD API one by one. Results appear in real time as each device is processed. The most critical devices are sorted to the top automatically.'} position="bottom" />
             </span>
             <span className="text-sm font-black text-white">{scanProgress}%</span>
           </div>
@@ -490,10 +510,12 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={showUnknown} onChange={() => setShowUnknown(v => !v)} className="accent-green-500" />
             Unknown
+            <InfoTip content="Show devices with a CVE score of 0.0 — either no vulnerabilities were found, or the device has no platform/OS data configured in NetBox. Uncheck to focus only on devices with confirmed CVEs." position="top" size={10} />
           </label>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={showVMs} onChange={() => setShowVMs(v => !v)} className="accent-green-500" />
             Virtual Machines
+            <InfoTip content="Show virtual machines from NetBox Virtualization. Uncheck to see only physical devices. VMs are identified by the blue server icon." position="top" size={10} />
           </label>
         </div>
       </div>
@@ -505,6 +527,19 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
         </div>
       ) : (
         <>
+          {/* Column legend */}
+          <div className="flex items-center px-3 py-1 text-[10px] text-gray-600 uppercase tracking-widest font-bold">
+            <div className="w-10 flex-shrink-0" />
+            <div className="flex-grow mx-4 flex items-center gap-1">
+              Device
+              <InfoTip content="Border color indicates CVE severity: green = clean (no CVEs), yellow = low (< 4.0), orange = medium/high (4.0–8.9), red = critical (≥ 9.0). Click any row to see the full CVE list and AI analysis." position="right" size={9} />
+            </div>
+            <div className="w-48 text-right hidden md:block">OS / Platform</div>
+            <div className="w-20 text-right flex items-center justify-end gap-1">
+              CVE Score
+              <InfoTip content="Highest CVSS v3 base score across all CVEs found for this device. 0.0 = clean or no platform data. Spinning icon = NVD query in progress." position="left" size={9} />
+            </div>
+          </div>
           <div className="space-y-2">
             {pageItems.map((device) => (
               <div
@@ -604,8 +639,9 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                       >
                         {cve.id}
                       </a>
-                      <span className={`font-bold ${getSeverityTextClass(cve.score)}`}>
+                      <span className={`font-bold flex items-center gap-1.5 ${getSeverityTextClass(cve.score)}`}>
                         {cve.severity} — {cve.score}
+                        <InfoTip content={`CVSS v3 base score ${cve.score}: ${cve.severity}. Scores reflect exploitability and impact but not your specific network exposure. Click the CVE ID to view full NVD details including vector string and known exploits.`} position="left" size={10} />
                       </span>
                     </div>
                     <p className="mt-2 text-gray-300 text-sm">{cve.description}</p>
@@ -615,7 +651,10 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                 <p className="text-gray-400">No vulnerabilities found for this device.</p>
               )}
               <div className="p-4 bg-gray-800 rounded-lg">
-                <h3 className="text-lg font-bold mb-2 text-yellow-500">AI Analysis</h3>
+                <h3 className="text-lg font-bold mb-2 text-yellow-500 flex items-center gap-2">
+                  AI Analysis
+                  <InfoTip content="LLM-generated security assessment for this specific device. Covers CVE impact in context, exploitation likelihood, recommended actions, and urgency. Generated by the vLLM inference endpoint using the device's OS, CVE list, and severity scores as input." position="left" size={11} />
+                </h3>
                 {selectedDevice.llm_analysis === 'Scanning...' || selectedDevice.llm_analysis === 'Analyzing vulnerabilities...' ? (
                   <div className="flex items-center gap-2 text-gray-400 text-sm">
                     <RefreshCw size={14} className="animate-spin" /> Generating analysis...

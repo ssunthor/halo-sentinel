@@ -5,6 +5,7 @@ import {
   Server, Layers, Bug, Cpu, Zap, Clock, CheckCircle2, DatabaseZap,
   BarChart3, ListTodo,
 } from 'lucide-react';
+import { InfoTip } from './Tooltip';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,10 +69,11 @@ const SortIcon = ({ field, current, dir }) =>
 // ---------------------------------------------------------------------------
 // Sub-panels
 // ---------------------------------------------------------------------------
-const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', wide }) => (
+const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', wide, tooltip }) => (
   <div className={`bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-1 ${wide ? 'md:col-span-2' : ''}`}>
-    <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wider font-semibold">
+    <div className="flex items-center gap-1.5 text-gray-500 text-xs uppercase tracking-wider font-semibold">
       {Icon && <Icon size={12} />}{label}
+      {tooltip && <InfoTip content={tooltip} position="bottom" size={10} />}
     </div>
     <div className={`text-2xl font-black font-mono ${accent}`}>{value}</div>
     {sub && <div className="text-xs text-gray-600">{sub}</div>}
@@ -87,6 +89,7 @@ const SeverityPanel = ({ breakdown }) => {
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
       <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-1.5">
         <AlertTriangle size={10} /> Severity Breakdown
+        <InfoTip content="Breakdown of all CVE instances across every scanned tenant by CVSS severity band. CRITICAL = 9.0–10.0, HIGH = 7.0–8.9, MEDIUM = 4.0–6.9, LOW = 0.1–3.9. One device with multiple CVEs contributes one count per CVE." position="bottom" />
       </div>
       <div className="space-y-2">
         {order.map(sev => {
@@ -118,6 +121,7 @@ const PlatformPanel = ({ platforms }) => (
   <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-1.5">
       <Layers size={10} /> Top Platforms by Exposure
+      <InfoTip content="OS/firmware platforms ranked by number of vulnerable devices. The progress bar shows what percentage of that platform's devices have at least one CVE. Max score is the highest single CVE score found on any device running that platform." position="bottom" />
     </div>
     <div className="space-y-2">
       {(platforms || []).slice(0, 8).map((p, i) => (
@@ -152,6 +156,7 @@ const TopCvesPanel = ({ cves }) => (
   <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-1.5">
       <Bug size={10} /> Most Widespread CVEs
+      <InfoTip content="CVEs that appear on the most devices across the entire estate, sorted by device count. Click any CVE ID to open its full NVD detail page. Widespread CVEs are highest-priority for patching because a single fix protects the most assets." position="bottom" />
     </div>
     <div className="space-y-1.5">
       {(cves || []).slice(0, 8).map((c, i) => (
@@ -219,10 +224,11 @@ const fmtMs = (ms) => {
   return `${ms}ms`;
 };
 
-const MiniStat = ({ icon: Icon, label, value, accent = 'text-white', title }) => (
-  <div className="flex flex-col gap-0.5" title={title}>
+const MiniStat = ({ icon: Icon, label, value, accent = 'text-white', tooltip }) => (
+  <div className="flex flex-col gap-0.5">
     <div className="flex items-center gap-1 text-[10px] text-gray-500 uppercase tracking-wider">
       {Icon && <Icon size={9} />}{label}
+      {tooltip && <InfoTip content={tooltip} position="bottom" size={9} />}
     </div>
     <div className={`font-mono font-bold text-sm ${accent}`}>{value ?? '—'}</div>
   </div>
@@ -282,20 +288,30 @@ const AiStatsPanel = ({ apiBase }) => {
 
       {/* Stats grid */}
       <div className="grid grid-cols-3 gap-x-4 gap-y-3 mb-4">
-        <MiniStat icon={BarChart3}  label="Analyzed (24h)"   value={(ai.analyzed_last_24h ?? 0).toLocaleString()} accent="text-green-400" />
-        <MiniStat icon={ListTodo}   label="In queue"          value={(ai.pending_devices ?? 0).toLocaleString()}   accent={ai.pending_devices > 0 ? 'text-yellow-400' : 'text-gray-400'} />
-        <MiniStat icon={Server}     label="Tenants pending"   value={(ai.pending_tenants ?? 0).toLocaleString()}   />
-        <MiniStat icon={Activity}   label="Session total"     value={(ai.total_analyzed ?? 0).toLocaleString()}    accent="text-purple-400" />
-        <MiniStat icon={Zap}        label="API calls"         value={(ai.total_api_calls ?? 0).toLocaleString()}   />
-        <MiniStat icon={DatabaseZap} label="Cache hits"       value={(ai.total_cache_hits ?? 0).toLocaleString()}  accent="text-blue-400" />
+        <MiniStat icon={BarChart3}  label="Analyzed (24h)"   value={(ai.analyzed_last_24h ?? 0).toLocaleString()} accent="text-green-400"
+          tooltip="Devices the AI worker has completed a security assessment for in the last 24 hours. Resets on a rolling basis, not at midnight." />
+        <MiniStat icon={ListTodo}   label="In queue"          value={(ai.pending_devices ?? 0).toLocaleString()}   accent={ai.pending_devices > 0 ? 'text-yellow-400' : 'text-gray-400'}
+          tooltip="Vulnerable devices across all tenants that still need an AI-generated security assessment. The worker processes these in background, rate-limited to avoid overloading the vLLM endpoint." />
+        <MiniStat icon={Server}     label="Tenants pending"   value={(ai.pending_tenants ?? 0).toLocaleString()}
+          tooltip="Number of tenants that need either a new estate-level risk summary or have individual devices awaiting AI analysis." />
+        <MiniStat icon={Activity}   label="Session total"     value={(ai.total_analyzed ?? 0).toLocaleString()}    accent="text-purple-400"
+          tooltip="Total devices analyzed by the AI worker since the backend service last started. Resets on service restart." />
+        <MiniStat icon={Zap}        label="API calls"         value={(ai.total_api_calls ?? 0).toLocaleString()}
+          tooltip="Actual requests sent to the vLLM inference endpoint this session. Lower is better — the cache avoids redundant calls for identical device profiles." />
+        <MiniStat icon={DatabaseZap} label="Cache hits"       value={(ai.total_cache_hits ?? 0).toLocaleString()}  accent="text-blue-400"
+          tooltip="Times an analysis result was served from the local LLM response cache instead of making a new API call. Reduces latency and API load for devices with identical configurations." />
       </div>
 
       {/* Latency row */}
       <div className="border-t border-gray-800 pt-3 grid grid-cols-4 gap-2">
-        <MiniStat icon={Clock} label="Avg latency"  value={fmtMs(ai.avg_latency_ms)}  accent="text-cyan-400" title="Rolling avg of last 100 real API calls" />
-        <MiniStat label="P95"      value={fmtMs(ai.p95_latency_ms)} title="95th percentile latency" />
-        <MiniStat label="Min"      value={fmtMs(ai.min_latency_ms)} accent="text-green-400" />
-        <MiniStat label="Max"      value={fmtMs(ai.max_latency_ms)} accent={ai.max_latency_ms > 30000 ? 'text-red-400' : 'text-gray-300'} />
+        <MiniStat icon={Clock} label="Avg latency"  value={fmtMs(ai.avg_latency_ms)}  accent="text-cyan-400"
+          tooltip="Average response time for real vLLM API calls, measured over the last 100 requests. Does not include cache hits." />
+        <MiniStat label="P95"      value={fmtMs(ai.p95_latency_ms)}
+          tooltip="95th percentile latency — 95% of API calls complete faster than this value. High P95 vs average indicates occasional slow responses from the vLLM endpoint." />
+        <MiniStat label="Min"      value={fmtMs(ai.min_latency_ms)} accent="text-green-400"
+          tooltip="Fastest API response recorded in the current latency window (last 100 calls)." />
+        <MiniStat label="Max"      value={fmtMs(ai.max_latency_ms)} accent={ai.max_latency_ms > 30000 ? 'text-red-400' : 'text-gray-300'}
+          tooltip="Slowest API response recorded in the current latency window. Values over 30s (shown in red) may indicate vLLM endpoint pressure or large context." />
       </div>
 
       {/* Cache rate bar */}
@@ -451,19 +467,22 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
         <>
           {/* ── Estate stat cards ── */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <StatCard icon={Shield}    label="Clients Scanned"    value={fmt(estate.total_tenants)}     accent="text-green-400" />
-            <StatCard icon={Server}    label="Total Devices"      value={fmt(estate.total_devices)}     />
+            <StatCard icon={Shield}    label="Clients Scanned"    value={fmt(estate.total_tenants)}     accent="text-green-400"
+              tooltip="Number of unique NetBox tenants that have been scanned at least once. Click any client row in the rankings table to view its full vulnerability report." />
+            <StatCard icon={Server}    label="Total Devices"      value={fmt(estate.total_devices)}
+              tooltip="Total physical devices and virtual machines across all scanned tenants. Includes devices with and without CVE data." />
             <StatCard icon={AlertTriangle} label="Vulnerable"     value={fmt(estate.vulnerable_devices)}
               sub={estate.total_devices ? `${Math.round(100 * (estate.vulnerable_devices || 0) / estate.total_devices)}% of estate` : ''}
               accent="text-orange-400"
-            />
+              tooltip="Devices where the NVD API returned at least one matching CVE. The percentage shows how much of the total estate is affected." />
             <StatCard icon={AlertTriangle} label="Critical Devices" value={fmt(estate.critical_devices)}
               sub="CVE score ≥ 9.0" accent={estate.critical_devices > 0 ? 'text-red-500' : 'text-green-400'}
-            />
-            <StatCard icon={Bug}       label="CVE Instances"     value={fmt(estate.total_cve_instances)} accent="text-yellow-400" />
+              tooltip="Devices carrying at least one CVE with a CVSS score of 9.0 or higher. These represent the highest-severity exposure and should be prioritized for immediate patching." />
+            <StatCard icon={Bug}       label="CVE Instances"     value={fmt(estate.total_cve_instances)} accent="text-yellow-400"
+              tooltip="Total count of individual CVE matches across all devices and all tenants. One device can contribute multiple CVE instances if multiple vulnerabilities were found." />
             <StatCard icon={Activity}  label="Peak CVE Score"    value={(estate.max_score || 0).toFixed(1)}
               accent={scoreColor(estate.max_score)}
-            />
+              tooltip="Highest individual CVE CVSS score found anywhere in the estate. A score of 10.0 is the maximum. This is the single most severe known vulnerability in the environment." />
           </div>
 
           {/* ── Info panels ── */}
@@ -506,19 +525,41 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
                       <ThBtn field="name" current={sortBy} dir={sortDir} onSort={handleSort}>Client</ThBtn>
                     </th>
                     <th className="px-3 py-2 text-right">
-                      <ThBtn field="total_devices" current={sortBy} dir={sortDir} onSort={handleSort}>Devices</ThBtn>
+                      <div className="flex items-center justify-end gap-1">
+                        <ThBtn field="total_devices" current={sortBy} dir={sortDir} onSort={handleSort}>Devices</ThBtn>
+                        <InfoTip content="Total physical devices and VMs for this tenant in NetBox." position="bottom" size={9} />
+                      </div>
                     </th>
                     <th className="px-3 py-2 text-right">
-                      <ThBtn field="vulnerable_devices" current={sortBy} dir={sortDir} onSort={handleSort}>Vulnerable</ThBtn>
+                      <div className="flex items-center justify-end gap-1">
+                        <ThBtn field="vulnerable_devices" current={sortBy} dir={sortDir} onSort={handleSort}>Vulnerable</ThBtn>
+                        <InfoTip content="Devices where the NVD API returned at least one CVE match. Devices without platform data are excluded from CVE scanning." position="bottom" size={9} />
+                      </div>
                     </th>
                     <th className="px-3 py-2 text-right">
-                      <ThBtn field="vuln_pct" current={sortBy} dir={sortDir} onSort={handleSort}>Vuln%</ThBtn>
+                      <div className="flex items-center justify-end gap-1">
+                        <ThBtn field="vuln_pct" current={sortBy} dir={sortDir} onSort={handleSort}>Vuln%</ThBtn>
+                        <InfoTip content="Percentage of total devices that have at least one CVE. Higher percentages indicate broader exposure across the tenant's estate." position="bottom" size={9} />
+                      </div>
                     </th>
                     <th className="px-3 py-2 text-right">
-                      <ThBtn field="max_score" current={sortBy} dir={sortDir} onSort={handleSort}>CVE Score</ThBtn>
+                      <div className="flex items-center justify-end gap-1">
+                        <ThBtn field="max_score" current={sortBy} dir={sortDir} onSort={handleSort}>CVE Score</ThBtn>
+                        <InfoTip content="Highest CVSS score of any single CVE found across this tenant's devices. Red ≥ 9.0 (Critical), Orange ≥ 7.0 (High), Yellow ≥ 4.0 (Medium)." position="bottom" size={9} />
+                      </div>
                     </th>
-                    <th className="px-3 py-2 text-center">Risk</th>
-                    <th className="px-3 py-2 text-center">Trend</th>
+                    <th className="px-3 py-2 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        Risk
+                        <InfoTip content="AI-generated overall risk posture for this tenant's estate. Derived from CVE severity, breadth of exposure, and device criticality by the LLM back-fill worker." position="bottom" size={9} />
+                      </div>
+                    </th>
+                    <th className="px-3 py-2 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        Trend
+                        <InfoTip content="AI-assessed direction of risk: improving (↓ fewer/lower CVEs than last scan), declining (↑ more/higher CVEs), or stable (—). Requires at least two scans to calculate." position="bottom" size={9} />
+                      </div>
+                    </th>
                     <th className="px-3 py-2 text-right hidden md:table-cell">Last Scan</th>
                   </tr>
                 </thead>

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp, ScrollText } from 'lucide-react';
+import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp, ScrollText, Settings2 } from 'lucide-react';
 import NetboxVulnerabilities from './components/NetboxVulnerabilities';
 import Leaderboard from './components/Leaderboard';
 import ChangelogViewer from './components/ChangelogViewer';
+import SettingsPage from './components/Settings';
 import { InfoTip } from './components/Tooltip';
 
 const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
@@ -443,6 +444,7 @@ const ChangelogModal = ({ onClose, apiBase }) => {
 export default function App() {
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [showChangelog, setShowChangelog] = useState(false);
+  const [page, setPage] = useState('dashboard'); // 'dashboard' | 'settings'
 
   return (
     <div className="min-h-screen bg-black text-white" style={{ fontFamily: 'monospace' }}>
@@ -450,9 +452,12 @@ export default function App() {
       <nav className="sticky top-0 z-40 bg-gray-950 border-b border-gray-800 shadow-lg">
         <div className="max-w-screen-2xl mx-auto px-4 py-3 flex items-center gap-4">
           <div className="flex items-center gap-3 flex-shrink-0">
-            <div className="w-8 h-8 rounded-lg bg-green-500/10 border border-green-500/30 flex items-center justify-center">
+            <button
+              onClick={() => setPage('dashboard')}
+              className="w-8 h-8 rounded-lg bg-green-500/10 border border-green-500/30 flex items-center justify-center hover:bg-green-500/20 transition-colors"
+            >
               <Shield size={16} className="text-green-500" />
-            </div>
+            </button>
             <div className="hidden sm:block">
               <div className="text-sm font-bold text-white tracking-wide">DEFENSE HALO</div>
               <div className="text-[10px] text-green-500 uppercase tracking-widest font-semibold">Customer CVE Analyzer</div>
@@ -470,27 +475,45 @@ export default function App() {
             <span className="hidden sm:inline">What's New</span>
           </button>
 
-          <GlobalScanPanel apiBase={apiBase} />
+          {page === 'dashboard' && <GlobalScanPanel apiBase={apiBase} />}
 
-          <TenantSelector
-            selectedTenant={selectedTenant}
-            onSelect={setSelectedTenant}
-          />
+          {page === 'dashboard' && (
+            <TenantSelector
+              selectedTenant={selectedTenant}
+              onSelect={setSelectedTenant}
+            />
+          )}
+
+          <button
+            onClick={() => setPage(p => p === 'settings' ? 'dashboard' : 'settings')}
+            title="Settings"
+            className={`p-2 rounded-lg border transition-colors flex-shrink-0 ${
+              page === 'settings'
+                ? 'border-green-500/50 bg-green-900/20 text-green-400'
+                : 'border-gray-700 bg-gray-900 text-gray-400 hover:text-green-400 hover:border-green-500/40'
+            }`}
+          >
+            <Settings2 size={15} />
+          </button>
         </div>
       </nav>
 
       {/* MAIN CONTENT */}
-      <main className="max-w-screen-2xl mx-auto">
-        {!selectedTenant ? (
-          <Leaderboard apiBase={apiBase} onSelectTenant={setSelectedTenant} />
-        ) : (
-          <NetboxVulnerabilities
-            apiBase={apiBase}
-            tenantId={String(selectedTenant.id)}
-            tenantName={selectedTenant.name}
-          />
-        )}
-      </main>
+      {page === 'settings' ? (
+        <SettingsPage />
+      ) : (
+        <main className="max-w-screen-2xl mx-auto">
+          {!selectedTenant ? (
+            <Leaderboard apiBase={apiBase} onSelectTenant={setSelectedTenant} />
+          ) : (
+            <NetboxVulnerabilities
+              apiBase={apiBase}
+              tenantId={String(selectedTenant.id)}
+              tenantName={selectedTenant.name}
+            />
+          )}
+        </main>
+      )}
 
       {/* CHANGELOG MODAL */}
       {showChangelog && (

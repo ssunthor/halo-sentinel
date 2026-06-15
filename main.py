@@ -7,6 +7,7 @@ import os
 import urllib.parse
 import math
 from collections import deque
+from pathlib import Path
 from fastapi import FastAPI, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -1575,6 +1576,15 @@ async def get_leaderboard(limit: int = 100, min_devices: int = 1):
     Useful for prioritising remediation across the estate.
     """
     return db.get_leaderboard(limit=min(limit, 1000), min_devices=min_devices)
+
+
+@app.get("/api/changelog")
+async def get_changelog():
+    """Return the changelog.json file for the in-app release notes viewer."""
+    changelog_path = Path(__file__).parent / "changelog.json"
+    if not changelog_path.exists():
+        return []
+    return json_loads(changelog_path.read_text())
 
 
 # Status endpoint (legacy compat, also used by frontend health check)

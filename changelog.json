@@ -1,19 +1,5 @@
 [
   {
-    "id": "BACKEND",
-    "service": "Backend API",
-    "version": "2026.06.15",
-    "date": "2026-06-15",
-    "changes": [
-      {
-        "category": "✨ Features",
-        "items": [
-          "GET /api/changelog endpoint serving this file for in-app release notes [NEEDS_DOCS]"
-        ]
-      }
-    ]
-  },
-  {
     "id": "FRONTEND",
     "service": "Dashboard Frontend",
     "version": "2026.06.15",
@@ -22,9 +8,14 @@
       {
         "category": "✨ Features",
         "items": [
-          "Tooltips and info icons on every dashboard widget, stat card, table column header, and device detail modal — all panels now self-documenting for NOC operators [NEEDS_DOCS]",
-          "Changelog viewer — in-app release notes accessible from the nav bar",
-          "Viewport-aware tooltip positioning: tooltips now clamp to screen edges using React portal + useLayoutEffect, preventing cut-off near left/right edges"
+          "In-app changelog viewer: What's New button in nav bar opens a modal with full release history grouped by month, collapsible per-release accordions, and stat badges showing item counts per category",
+          "Viewport-aware tooltip positioning: tooltips now render via React portal and clamp to screen edges using useLayoutEffect — prevents cut-off when trigger elements are near the left or right viewport edge"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Tooltips and info icons on every dashboard widget, stat card, table column header, scan progress bar, filter toggle, and device detail modal — all panels now self-documenting for NOC operators"
         ]
       }
     ]
@@ -32,14 +23,13 @@
   {
     "id": "BACKEND",
     "service": "Backend API",
-    "version": "2026.06.12",
-    "date": "2026-06-12",
+    "version": "2026.06.15",
+    "date": "2026-06-15",
     "changes": [
       {
         "category": "✨ Features",
         "items": [
-          "Background LLM back-fill worker: continuously finds tenants with missing AI analysis and processes them rate-limited (asyncio.Semaphore(2), 3s between devices, 8s between tenants) to avoid overloading the vLLM endpoint",
-          "GET /api/ai/stats endpoint: exposes queue depth, 24h completion count, session totals, rolling latency stats (avg/P95/min/max over last 100 calls), cache hit rate, and current job identity"
+          "GET /api/changelog endpoint: serves changelog.json from disk for the in-app release notes viewer"
         ]
       }
     ]
@@ -53,7 +43,42 @@
       {
         "category": "✨ Features",
         "items": [
-          "AI Analysis Engine panel on leaderboard landing page: live LLM worker stats with 5-second polling — status indicator, current job banner, queue depth, session totals, latency breakdown, and cache hit rate progress bar"
+          "AI Analysis Engine panel on the leaderboard landing page: live LLM worker stats polling every 5 seconds — status indicator (starting/idle/analyzing), current job device and tenant, queue depth, 24h completion count, session totals, API calls vs cache hits breakdown, rolling latency stats (avg/P95/min/max), cache hit rate progress bar"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.06.12",
+    "date": "2026-06-12",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Background LLM back-fill worker: continuously scans for tenants with missing AI estate summaries or unanalyzed vulnerable devices and processes them rate-limited (asyncio.Semaphore(2), 3s between devices, 8s between tenants, 20s startup delay) — no manual trigger required",
+          "GET /api/ai/stats endpoint: exposes real-time worker metrics including status, current device/tenant being analyzed, pending queue depth, 24h completion window (rolling deque), session totals, API call counts, cache hit rate, and rolling P95/avg/min/max latency over the last 100 LLM calls"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
+    "version": "2026.06.11",
+    "date": "2026-06-11",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Standalone Customer CVE Analyzer: new dark-themed monospace SPA purpose-built for NOC operators — replaces the embedded NetBox CVE view",
+          "Leaderboard landing page: estate overview stat cards (clients, total devices, vulnerable, critical, CVE instances, peak score), customer risk rankings table sortable and filterable by any column, severity breakdown bar chart, top platforms by exposure, most widespread CVEs across all tenants with NVD links",
+          "GlobalScanPanel in nav bar: trigger an estate-wide scan across all NetBox tenants and monitor live progress — inventory counts, platform analysis, NVD query queue (completed/waiting/cache hits), results, and per-phase timing all stream in real time via SSE",
+          "Tenant selector: debounced search against NetBox API, has-devices filter, stale cache age indicators, recently-scanned list",
+          "Device list streams in real time via SSE — rows appear as each device is processed and sort by CVE severity score automatically so the most critical devices are always at the top",
+          "Per-tenant Excel export button in the tenant view header",
+          "Export All button on the leaderboard to download every vulnerable device across all tenants in one workbook"
         ]
       }
     ]
@@ -67,22 +92,57 @@
       {
         "category": "✨ Features",
         "items": [
-          "Standalone Customer CVE Analyzer: full multi-tenant NetBox CVE scanning service built on FastAPI with SQLite (WAL mode) for persistent scan history",
-          "Global scan: deduplicated NVD API queries across all tenants via combo_map — devices sharing identical platform+version share one API call, reducing NVD load significantly",
-          "Per-tenant and global scan endpoints with Server-Sent Events (SSE) streaming — results appear in the dashboard in real time as each device is processed",
-          "Excel export (per-tenant and all tenants): styled workbook with CVE score color-coding (red ≥ 9.0, orange ≥ 7.0, yellow ≥ 4.0), frozen header row, auto column widths",
-          "Leaderboard endpoint with estate-wide aggregates: total counts, vulnerable/critical device tallies, top CVEs by device count, severity breakdown, platform exposure rankings",
-          "Capture serial number, PON (cmd_pon custom field), platform name, and OS version from NetBox for each device and VM",
-          "LLM estate summary with risk posture, trend comparison, top CVEs, and prioritized remediation recommendations — generated per tenant after each scan completes",
-          "Per-device LLM security assessment stored alongside CVE data and streamed to the dashboard"
+          "Standalone Customer CVE Analyzer backend: multi-tenant NetBox CVE scanning service built on FastAPI",
+          "SQLite database with WAL mode and threading.Lock write serialization for concurrent reads during active scans",
+          "Global scan (POST /api/scan/global): fetches all devices and VMs across every tenant in one pass, deduplicates NVD queries via combo_map (platform+version → [devices]) so devices sharing an identical OS version share one API call — dramatically reduces NVD load on large estates",
+          "SSE streaming on GET /api/results/{tenant_id}/stream and GET /api/scan/global/stream — device events and progress snapshots push to the browser as they arrive",
+          "Excel export (GET /api/export/tenant/{id} and /api/export/all): openpyxl workbook with CVE score color-coding (red ≥ 9.0, orange ≥ 7.0, yellow ≥ 4.0), frozen header row, auto column widths, export filtered to CVE score > 0 only",
+          "Leaderboard and estate stats endpoints: per-tenant rankings, aggregate vulnerable/critical counts, top CVEs by device count across all tenants, severity breakdown, platform exposure",
+          "Capture serial number, PON (cmd_pon NetBox custom field), platform name, and OS version from NetBox for every device and VM",
+          "LLM-generated estate summary per tenant: risk posture, one-sentence risk summary, top CVEs with recommended actions, prioritized remediation list, trend comparison vs previous scan"
         ]
       },
       {
         "category": "🐛 Bug Fixes",
         "items": [
-          "Fix startup crash: CREATE INDEX for platform_name column was running inside executescript before the ALTER TABLE migration — moved index creation to after the migration loop",
-          "Fix Excel export: strip XML-illegal control characters (ASCII 0x00-0x08, 0x0b-0x0c, 0x0e-0x1f) from NetBox strings using regex sanitizer before writing cells",
-          "Export filtered to only include devices with CVE score > 0 — clean devices excluded"
+          "Fix startup crash: CREATE INDEX for platform_name column was executing inside executescript before the ALTER TABLE column migration ran — moved index creation to after the migration loop",
+          "Fix Excel export: NetBox device names and field values can contain XML-illegal control characters (ASCII 0x00–0x08, 0x0b–0x0c, 0x0e–0x1f) that openpyxl rejects — added regex sanitizer applied to all string cell writes"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.06.08",
+    "date": "2026-06-08",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Destinations map: plot NetFlow flows with public IPs on the 2D world map; added protocol field to flow data so operators can distinguish TCP/UDP/ICMP traffic geographically"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.05.27",
+    "date": "2026-05-27",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "NetBox CVE scanning with real-time SSE streaming: device results push to the dashboard as each NVD query completes rather than waiting for the full scan",
+          "Persistent JSON cache for CVE and LLM analysis results — scan progress survives backend restarts",
+          "Authenticated vLLM integration with Keycloak client-credentials OAuth2 flow (KeycloakTokenManager singleton); falls back to static bearer token when LLM_AUTH_URL is not set"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Removed role-based device filtering from NetBox scanner — all tenant devices are scanned regardless of role, simplifying configuration and eliminating missed devices"
         ]
       }
     ]
@@ -90,19 +150,314 @@
   {
     "id": "FRONTEND",
     "service": "Dashboard Frontend",
-    "version": "2026.06.11",
-    "date": "2026-06-11",
+    "version": "2026.05.27",
+    "date": "2026-05-27",
     "changes": [
       {
         "category": "✨ Features",
         "items": [
-          "Standalone Customer CVE Analyzer SPA: dark-themed, monospace NOC dashboard replacing the original embedded NetBox CVE view",
-          "Leaderboard landing page: estate overview stat cards, customer risk rankings table (sortable/filterable), severity breakdown bar chart, top platforms by exposure, most widespread CVEs across all tenants",
-          "GlobalScanPanel in nav bar: trigger an estate-wide scan and monitor live progress — inventory counts, platform analysis, NVD query queue, results, and phase timing all update in real time via SSE",
-          "Tenant selector with debounced search, has-devices filter, stale cache age indicators, and recently-scanned list",
-          "SSE streaming in tenant view: device rows stream in and sort by severity score in real time as the scan progresses — most critical devices always visible first",
-          "Per-tenant Excel export button in tenant view header",
-          "Export All button on leaderboard to download every vulnerable device across every tenant in one workbook"
+          "NetBox CVE view revamped to list format with real-time streaming updates — devices appear as they are scanned rather than all at once after completion",
+          "Virtual machine support in CVE results: VMs now scanned and displayed alongside physical devices with a distinct icon"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Removed role selection UI — scanner now always fetches all tenant devices, removing a configuration step that caused incomplete scans"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.05.05",
+    "date": "2026-05-05",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "NetBox tenant filtering: when NETBOX_TENANT_ID is set, devices are fetched scoped to that tenant only",
+          "NVD query deduplication across devices with identical platform+version — one API call per unique OS version combination, 10-second rate limit between calls to comply with NIST limits"
+        ]
+      },
+      {
+        "category": "🐛 Bug Fixes",
+        "items": [
+          "Improved CVE keyword matching for Fortinet/FortiOS devices",
+          "Strict platform and os_build requirement enforced — devices missing either field are skipped with a clear log entry rather than producing incorrect CVE matches",
+          "Use limit=0 on NetBox device API calls to retrieve all devices, not just the first page"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
+    "version": "2026.05.05",
+    "date": "2026-05-05",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "NetBox CVE view: pagination with configurable page size, text search across device name/model/OS, and items-per-page selector",
+          "Unknown device filter toggle: hide devices with no CVE matches to focus the view on confirmed vulnerabilities",
+          "Export error fix: resolved crash when downloading the CVE report with certain device names"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.04.27",
+    "date": "2026-04-27",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "DFP feedback loop: user-marked anomalies as 'normal' are synchronized across all backend pods via a dedicated Kafka control topic — feedback propagates to every running instance immediately",
+          "Configurable training URL and vLLM endpoint via environment variables — no code change required to point at a different inference cluster"
+        ]
+      },
+      {
+        "category": "🐛 Bug Fixes",
+        "items": [
+          "Fixed feedback endpoint path — removed redundant /api prefix that caused 404 errors"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
+    "version": "2026.04.24",
+    "date": "2026-04-24",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Cisco FMC integration in Config Analyzer: connect to Cisco Firepower Management Center and analyze firewall policy configuration",
+          "Config issue download: export identified configuration issues as a report from the Config Analyzer page",
+          "User feedback loop UI: operators can mark flagged anomalies as normal from the Host Inventory, triggering immediate model fine-tuning via the /feedback endpoint",
+          "Config Analyzer features split into individual tabs — Config Analyzer, Config Translator, and Policy Generator are now separate navigable panels"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Menu item visibility controllable via VITE_SHOW_* environment variables — deploy with only the panels relevant to each environment",
+          "Removed unused visualizations (Torus removed from menu); Galaxy and Destinations retained"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.04.22",
+    "date": "2026-04-22",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "DFP anomaly feedback loop: POST /feedback accepts operator-confirmed normal events, triggers immediate background model.fit fine-tune on the host's AutoEncoder, and persists the sample for inclusion in future full training cycles — adaptation is permanent, not session-only"
+        ]
+      },
+      {
+        "category": "🐛 Bug Fixes",
+        "items": [
+          "Removed artificial 3/6/10 anomaly score injection that was inflating reported scores during development"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.03.18",
+    "date": "2026-03-18",
+    "changes": [
+      {
+        "category": "🐛 Bug Fixes",
+        "items": [
+          "Fixed anomaly score calculation and accumulation for syslog events — scores were not being correctly summed across parallel Kafka workers",
+          "Restored global anomaly score history trend — rolling accumulation was lost after refactor",
+          "Added thread-safety to global anomaly counters using threading.Lock — race conditions caused intermittent incorrect score totals",
+          "Firewall regex updated to support multiple log formats (FTD, ASA, legacy) and correctly extract destination port"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Removed redundant parsing functions; consolidated anomaly counter aggregation into parallel fetch path"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.03.10",
+    "date": "2026-03-10",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Background AI host analysis: hosts with anomaly score > 5.0 are automatically queued for LLM analysis in a background thread — analysis result exposed via has_analysis flag and GET /api/host/{host}/analysis",
+          "24-hour retention enforced for AI analysis results — stale analyses are re-queued automatically",
+          "C2 beaconing detections included in Host Inventory stats and host records"
+        ]
+      },
+      {
+        "category": "🐛 Bug Fixes",
+        "items": [
+          "NetFlow port identification logic added — previously source and destination ports were sometimes swapped",
+          "Failed login and logon detection made more robust by checking message body keywords rather than relying solely on log category",
+          "AI analysis thread-safety fix: analysis triggers now deferred to the main asyncio event loop to avoid race conditions with the WebSocket writer",
+          "Active Hosts metric synchronized with Host Inventory Total Assets count — were previously calculated differently and showed different numbers"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
+    "version": "2026.03.13",
+    "date": "2026-03-13",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "System Log Galaxy: Top 10 hosts by anomaly score set as default view on load",
+          "Label toggle upgraded to three modes: All labels, Anomalies only, Off — reduces visual clutter on dense graphs",
+          "Max score filter slider: hide hosts below a configurable anomaly score threshold in the Galaxy",
+          "Score-based host label filter: only show labels for hosts above a configurable score (default 8.0)"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Removed datacenter pulldown and firewall allow/deny filters from System Galaxy — redundant with the score filter and caused confusion"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
+    "version": "2026.03.09",
+    "date": "2026-03-09",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "AI Behavioral Insight section in Host Detail overlay: shows LLM-generated analysis for anomalous hosts, collapsed by default to keep the overlay clean",
+          "Sparkle icon in Host Inventory for hosts that have a completed AI analysis — at-a-glance indicator without opening the detail view",
+          "C2 detected hosts highlighted with a badge in Host Inventory and included in summary stats",
+          "Summary stats row at the top of Host Inventory: total assets, high-risk count, C2 detected count, active users"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Anomaly score thresholds updated: Good 0–2.99, Warning 3–5.99, Critical 6–10; host inventory High Risk threshold raised to ≥ 6.0"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
+    "version": "2026.03.05",
+    "date": "2026-03-05",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Network Galaxy: galaxy expansion slider to control node density and spread",
+          "Network Galaxy: Anomalies Only filter to show only hosts with a non-zero anomaly score",
+          "Cyber City: building heights driven by event count with host list fallback for hosts not in the topology",
+          "Log stream split into separate syslog and firewall streams for improved WebSocket performance on high-volume deployments"
+        ]
+      },
+      {
+        "category": "🐛 Bug Fixes",
+        "items": [
+          "Fixed sticky tooltip in Network Galaxy when moving the cursor off a node quickly",
+          "Fixed background click behavior — clicking empty space in the Galaxy no longer triggers node selection",
+          "Fixed Time display in system event stream by correctly mapping rawLog.time field",
+          "Blocked markers on the Destinations map now render above flow lines"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.03.05",
+    "date": "2026-03-05",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Global snapshot cache: pre-built WebSocket payload refreshed by a dedicated background worker (global_snapshot_worker) — WebSocket loop now reads a cache instead of recomputing on every tick, eliminating dashboard lag under high event load",
+          "Parallel Kafka batch processing: batch fetch and parsing run inside a ThreadPoolExecutor so the asyncio event loop and WebSocket writer are never blocked",
+          "Comprehensive host list endpoint for Cyber City and Host Inventory — expanded to 15,000 hosts to match active host counts in large environments",
+          "Expanded log categorization filters for syslog event types"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Split high-volume firewall logs into a separate Kafka collection to reduce processing pressure on the syslog pipeline",
+          "High-fidelity GeoIP mapping restored with caching — GeoIP lookups cached to avoid per-event overhead while maintaining accurate country/city/ASN data",
+          "Pruned high-volume NetFlow data to prevent Redis memory growth and reduce dashboard update lag"
+        ]
+      },
+      {
+        "category": "🐛 Bug Fixes",
+        "items": [
+          "Fixed BatchAccumulator attribute names after refactor — topology and anomaly data was being silently dropped",
+          "Fixed traffic volume persistence in topology nodes — byte counts were resetting on each batch instead of accumulating"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.03.04",
+    "date": "2026-03-04",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Initial release: FastAPI backend consuming Kafka syslog and NetFlow topics, aggregating state in Redis, serving the dashboard via REST and WebSocket (/ws)",
+          "GeoIP databases bundled: MaxMind City, ASN, and Country databases for real-time geo-enrichment of IP addresses in NetFlow and firewall logs",
+          "NetFlow DFP score labels: 0.0 reported as Learning (model not yet trained), >0.0 as Normal/Anomalous based on reconstruction error",
+          "Log categorization: syslog events classified into authentication, process, network, and security categories"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
+    "version": "2026.03.04",
+    "date": "2026-03-04",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Initial release: React + Vite SPA with WebSocket connection to the backend, dark theme, monospace font",
+          "3D Network Galaxy (react-force-graph-3d): real-time topology visualization of syslog hosts colored by anomaly score",
+          "Cyber City (three.js): 3D building visualization where height represents event volume",
+          "Destinations map (react-globe.gl): NetFlow flows plotted on a 3D globe with country-level GeoIP",
+          "Host Inventory: sortable host list with anomaly scores, event counts, and category breakdowns",
+          "NetBox Vulnerabilities: initial CVE scanning panel backed by the backend NetBox integration",
+          "ChatWidget: AI chat interface backed by the vLLM endpoint for analyst Q&A",
+          "Overall Analysis panel: LLM-generated estate-wide security summary refreshed periodically"
         ]
       }
     ]

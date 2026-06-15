@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY llm_interface.py .
 COPY db.py .
+COPY email_report.py .
 COPY changelog.json .
 
 ENV PYTHONUNBUFFERED=1

@@ -12,7 +12,8 @@ from fastapi import FastAPI, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import httpx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import email_report
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 import redis
@@ -1608,6 +1609,143 @@ async def get_status():
     return {"service": "Defense Halo Customer CVE Analyzer", "status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# Notification config endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/config/notifications")
+async def list_notifications():
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(thread_pool, db.list_notifications)
+
+
+@app.post("/api/config/notifications")
+async def create_notification(payload: dict):
+    loop = asyncio.get_running_loop()
+    saved = await loop.run_in_executor(thread_pool, db.save_notification, payload)
+    return saved
+
+
+@app.put("/api/config/notifications/{notification_id}")
+async def update_notification(notification_id: str, payload: dict):
+    payload["id"] = notification_id
+    loop = asyncio.get_running_loop()
+    saved = await loop.run_in_executor(thread_pool, db.save_notification, payload)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return saved
+
+
+@app.delete("/api/config/notifications/{notification_id}")
+async def delete_notification(notification_id: str):
+    loop = asyncio.get_running_loop()
+    deleted = await loop.run_in_executor(thread_pool, db.delete_notification, notification_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"ok": True}
+
+
+@app.post("/api/config/notifications/{notification_id}/test")
+async def test_notification(notification_id: str):
+    """Send a test email immediately using this notification's config."""
+    loop = asyncio.get_running_loop()
+    cfg = await loop.run_in_executor(thread_pool, db.get_notification, notification_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    try:
+        rows         = await loop.run_in_executor(thread_pool, db.get_export_rows, None)
+        xlsx         = await loop.run_in_executor(thread_pool, _build_excel, rows)
+        stats        = await loop.run_in_executor(thread_pool, db.get_estate_stats)
+        leaderboard  = await loop.run_in_executor(thread_pool, db.get_leaderboard, 20, 0)
+        await loop.run_in_executor(
+            thread_pool, email_report.send_report_email, cfg, xlsx, stats, leaderboard
+        )
+        return {"ok": True, "message": "Test email sent successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Notification scheduler
+# ---------------------------------------------------------------------------
+
+def _should_fire(cfg: dict, now: datetime) -> bool:
+    """Return True if this notification is due to send right now."""
+    if not cfg.get("enabled"):
+        return False
+
+    time_str = (cfg.get("schedule_time_utc") or "00:00").strip()
+    try:
+        h, m = [int(x) for x in time_str.split(":")]
+    except ValueError:
+        return False
+
+    if now.hour != h or now.minute != m:
+        return False
+
+    freq = (cfg.get("schedule_frequency") or "daily").lower()
+    if freq == "daily":
+        pass  # time match is sufficient
+    elif freq == "weekly":
+        dow = int(cfg.get("schedule_day_of_week") or 1)
+        if now.isoweekday() != dow:
+            return False
+    elif freq == "monthly":
+        dom = int(cfg.get("schedule_day_of_month") or 1)
+        if now.day != dom:
+            return False
+    else:
+        return False
+
+    # Avoid double-firing within the same minute
+    last = cfg.get("last_sent_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if (now - last_dt).total_seconds() < 90:
+                return False
+        except ValueError:
+            pass
+
+    return True
+
+
+async def notification_scheduler():
+    """Background task: check every 60s whether any notification is due."""
+    print("✅ Notification scheduler started.")
+    while True:
+        await asyncio.sleep(60)
+        try:
+            loop = asyncio.get_running_loop()
+            notifications = await loop.run_in_executor(thread_pool, db.list_notifications)
+            now = datetime.now(timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
+
+            for cfg in notifications:
+                if not _should_fire(cfg, now):
+                    continue
+
+                nid  = cfg["id"]
+                name = cfg.get("name", nid)
+                print(f"📧 Sending scheduled notification: {name}")
+                try:
+                    rows        = await loop.run_in_executor(thread_pool, db.get_export_rows, None)
+                    xlsx        = await loop.run_in_executor(thread_pool, _build_excel, rows)
+                    stats       = await loop.run_in_executor(thread_pool, db.get_estate_stats)
+                    leaderboard = await loop.run_in_executor(thread_pool, db.get_leaderboard, 20, 0)
+                    await loop.run_in_executor(
+                        thread_pool, email_report.send_report_email, cfg, xlsx, stats, leaderboard
+                    )
+                    sent_at = datetime.now(timezone.utc).isoformat()
+                    await loop.run_in_executor(
+                        thread_pool, db.update_notification_sent, nid, sent_at
+                    )
+                    print(f"  ✅ Notification '{name}' sent at {sent_at}")
+                except Exception as e:
+                    print(f"  ❌ Notification '{name}' failed: {e}")
+        except Exception as e:
+            print(f"❌ Notification scheduler error: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Defense Halo Customer CVE Analyzer starting...")
@@ -1626,6 +1764,8 @@ async def startup_event():
 
     asyncio.create_task(llm_analysis_worker())
     print("✅ LLM back-fill worker scheduled.")
+    asyncio.create_task(notification_scheduler())
+    print("✅ Notification scheduler started.")
     print("✅ Ready.")
 
 

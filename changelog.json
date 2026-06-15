@@ -2,6 +2,42 @@
   {
     "id": "FRONTEND",
     "service": "Dashboard Frontend",
+    "version": "2026.06.15b",
+    "date": "2026-06-15",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Settings page: gear icon in nav bar opens a tabbed configuration page (General placeholder + Notifications tab) — toggles in place of main content, logo/shield click returns to dashboard",
+          "Multi-notification email system: create multiple independent notification configs with distinct recipients, schedules, and message content — each stored in the database and managed independently",
+          "Notification edit form: SMTP server config (host, port, TLS mode: none/STARTTLS/TLS, optional username/password), configurable schedule (daily/weekly/monthly with time UTC and day picker), From/To/CC/BCC with tag-style email input, subject with token substitution hints, body preamble textarea, Save and Send Test buttons with inline status feedback",
+          "Notification list: cards showing name, enabled/disabled badge, schedule summary, recipient count, last-sent timestamp — with Edit and inline delete-confirm actions",
+          "TagInput component: pill-style email address editor — Enter or comma to add, Backspace removes last, X button removes individual, validates format and blocks duplicates"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.06.15b",
+    "date": "2026-06-15",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Email report delivery: send_report_email() in email_report.py builds a MIMEMultipart message with a plain-text body (optional operator preamble + auto-generated estate summary + top-10 client ranking) and attaches the CVE export as an Excel workbook (.xlsx) — supports none/STARTTLS/TLS modes and optional SMTP authentication",
+          "Subject token substitution: notification subject supports {date}, {datetime}, {total_clients}, {vulnerable}, {critical}, {peak_score} placeholders resolved at send time",
+          "Notification CRUD API: GET /api/config/notifications (list), POST /api/config/notifications (create), PUT /api/config/notifications/{id} (update), DELETE /api/config/notifications/{id}, POST /api/config/notifications/{id}/test (immediate test send)",
+          "Notification scheduler: asyncio background task wakes every 60 seconds, evaluates each enabled notification against its frequency/time/last_sent_at, and fires the report email for any that are due",
+          "Persistent notifications storage: notifications table in SQLite (id UUID, name, config JSON blob, updated_at, last_sent_at) — survives restarts, managed via db.py CRUD helpers"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
     "version": "2026.06.15",
     "date": "2026-06-15",
     "changes": [

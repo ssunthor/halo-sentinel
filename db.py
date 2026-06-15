@@ -88,6 +88,13 @@ def init_db():
                 FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS notifications (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                config      TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_devices_tenant        ON devices(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_devices_score         ON devices(highest_severity_score DESC);
             CREATE INDEX IF NOT EXISTS idx_cves_device           ON cves(device_id);
@@ -592,3 +599,105 @@ def migrate_from_json(cache_dir: str) -> int:
     if migrated:
         print(f"✅ Migrated {migrated} JSON cache(s) → SQLite")
     return migrated
+
+
+# ---------------------------------------------------------------------------
+# Notification CRUD
+# ---------------------------------------------------------------------------
+
+DEFAULT_NOTIFICATION_CONFIG = {
+    "enabled": False,
+    "smtp_host": "",
+    "smtp_port": 587,
+    "smtp_tls": "starttls",   # "none" | "starttls" | "tls"
+    "smtp_username": "",
+    "smtp_password": "",
+    "from_address": "",
+    "to_addresses": [],
+    "cc_addresses": [],
+    "bcc_addresses": [],
+    "subject": "Defense Halo CVE Report — {date}",
+    "body_preamble": "",
+    "schedule_frequency": "daily",    # "daily" | "weekly" | "monthly"
+    "schedule_time_utc": "00:00",
+    "schedule_day_of_week": 1,        # 1=Mon … 7=Sun (weekly only)
+    "schedule_day_of_month": 1,       # 1-31 (monthly only)
+    "last_sent_at": None,
+}
+
+
+def list_notifications() -> list[dict]:
+    rows = _connect().execute(
+        "SELECT id, name, config, updated_at FROM notifications ORDER BY updated_at ASC"
+    ).fetchall()
+    result = []
+    for row in rows:
+        cfg = json.loads(row["config"])
+        result.append({"id": row["id"], "name": row["name"], "updated_at": row["updated_at"], **cfg})
+    return result
+
+
+def get_notification(notification_id: str) -> dict | None:
+    row = _connect().execute(
+        "SELECT id, name, config, updated_at FROM notifications WHERE id = ?",
+        (notification_id,)
+    ).fetchone()
+    if not row:
+        return None
+    cfg = json.loads(row["config"])
+    return {"id": row["id"], "name": row["name"], "updated_at": row["updated_at"], **cfg}
+
+
+def save_notification(data: dict) -> dict:
+    """Insert or update a notification. Generates an id if absent."""
+    import uuid
+    nid  = data.get("id") or str(uuid.uuid4())
+    name = data.get("name", "Untitled Notification")
+    now  = datetime.utcnow().isoformat()
+
+    # Separate display fields from the config blob
+    cfg = {k: v for k, v in data.items() if k not in ("id", "name", "updated_at")}
+    # Preserve last_sent_at from existing record if not supplied
+    existing = get_notification(nid)
+    if existing and "last_sent_at" not in data:
+        cfg["last_sent_at"] = existing.get("last_sent_at")
+
+    with _write_lock:
+        _connect().execute(
+            """INSERT INTO notifications (id, name, config, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   name       = excluded.name,
+                   config     = excluded.config,
+                   updated_at = excluded.updated_at""",
+            (nid, name, json.dumps(cfg), now)
+        )
+        _connect().commit()
+
+    return get_notification(nid)
+
+
+def delete_notification(notification_id: str) -> bool:
+    with _write_lock:
+        cur = _connect().execute(
+            "DELETE FROM notifications WHERE id = ?", (notification_id,)
+        )
+        _connect().commit()
+    return cur.rowcount > 0
+
+
+def update_notification_sent(notification_id: str, sent_at: str):
+    """Record the last successful send timestamp without touching other fields."""
+    row = _connect().execute(
+        "SELECT config FROM notifications WHERE id = ?", (notification_id,)
+    ).fetchone()
+    if not row:
+        return
+    cfg = json.loads(row["config"])
+    cfg["last_sent_at"] = sent_at
+    with _write_lock:
+        _connect().execute(
+            "UPDATE notifications SET config = ? WHERE id = ?",
+            (json.dumps(cfg), notification_id)
+        )
+        _connect().commit()

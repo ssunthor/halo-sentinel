@@ -1639,9 +1639,9 @@ def _write_dashboard_sheet(ws, stats: dict, leaderboard: list):
     """Populate the Dashboard worksheet with estate stats and top-10 leaderboard."""
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
-    NAVY = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
-    SECT = PatternFill(start_color="2D2D2D", end_color="2D2D2D", fill_type="solid")
-    ALT  = PatternFill(start_color="1C1C1C", end_color="1C1C1C", fill_type="solid")
+    NAVY  = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+    SECT  = PatternFill(start_color="2D2D2D", end_color="2D2D2D", fill_type="solid")
+    ALT   = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
 
     def hdr(row, col, val, fill=NAVY, sz=13, bold=True, span=10, color="FFFFFF"):
         c = ws.cell(row=row, column=col, value=val)
@@ -1653,9 +1653,9 @@ def _write_dashboard_sheet(ws, stats: dict, leaderboard: list):
         ws.row_dimensions[row].height = 22 if sz >= 13 else 18
         return c
 
-    def kv(row, key, val, val_color="FFFFFF", bold_val=False):
+    def kv(row, key, val, val_color="000000", bold_val=False):
         lc = ws.cell(row=row, column=1, value=key)
-        lc.font = Font(color="9CA3AF", size=10)
+        lc.font = Font(color="444444", size=10)
         lc.alignment = Alignment(horizontal="left", vertical="center")
         vc = ws.cell(row=row, column=2, value=val)
         vc.font = Font(color=val_color, bold=bold_val, size=11)
@@ -1718,14 +1718,15 @@ def _write_dashboard_sheet(ws, stats: dict, leaderboard: list):
             except Exception:
                 age = "—"
         ws.cell(row=row, column=9, value=age).alignment = Alignment(horizontal="center")
-        row_fill = ALT if rank % 2 == 0 else PatternFill(start_color="111111", end_color="111111", fill_type="solid")
-        for col in range(1, 10):
-            ws.cell(row=row, column=col).fill = row_fill
+        row_fill = ALT if rank % 2 == 0 else None
+        if row_fill:
+            for col in range(1, 10):
+                ws.cell(row=row, column=col).fill = row_fill
         ws.row_dimensions[row].height = 16
         row += 1
 
     # ── Column widths ─────────────────────────────────────────────────
-    for col, width in enumerate([5, 28, 10, 12, 8, 11, 14, 10, 14], 1):
+    for col, width in enumerate([25, 28, 10, 12, 8, 11, 14, 10, 14], 1):
         ws.column_dimensions[get_column_letter(col)].width = width
 
 

@@ -1797,6 +1797,13 @@ async def get_leaderboard(limit: int = 100, min_devices: int = 1):
     return db.get_leaderboard(limit=min(limit, 1000), min_devices=min_devices)
 
 
+@app.get("/api/tenants")
+async def get_all_tenants():
+    """Return every scanned tenant — no limit — for use in filter pickers."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(thread_pool, db.get_leaderboard, 999999, 0)
+
+
 @app.get("/api/changelog")
 async def get_changelog():
     """Return the changelog.json file for the in-app release notes viewer."""

@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp, ScrollText, Settings2 } from 'lucide-react';
+import { Shield, ChevronDown, Clock, Server, RefreshCw, AlertTriangle, X, Globe, CheckCircle, Loader2, ChevronUp, ScrollText, Settings2, BookOpen } from 'lucide-react';
 import NetboxVulnerabilities from './components/NetboxVulnerabilities';
 import Leaderboard from './components/Leaderboard';
 import ChangelogViewer from './components/ChangelogViewer';
 import SettingsPage from './components/Settings';
+import UserGuide from './components/UserGuide';
 import { InfoTip } from './components/Tooltip';
 
 const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
@@ -444,7 +445,7 @@ const ChangelogModal = ({ onClose, apiBase }) => {
 export default function App() {
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [showChangelog, setShowChangelog] = useState(false);
-  const [page, setPage] = useState('dashboard'); // 'dashboard' | 'settings'
+  const [page, setPage] = useState('dashboard'); // 'dashboard' | 'settings' | 'guide'
 
   return (
     <div className="min-h-screen bg-black text-white" style={{ fontFamily: 'monospace' }}>
@@ -475,6 +476,19 @@ export default function App() {
             <span className="hidden sm:inline">What's New</span>
           </button>
 
+          <button
+            onClick={() => setPage(p => p === 'guide' ? 'dashboard' : 'guide')}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border transition-colors flex-shrink-0 ${
+              page === 'guide'
+                ? 'border-green-500/50 bg-green-900/20 text-green-400'
+                : 'border-gray-700 bg-gray-900 text-gray-400 hover:text-green-400 hover:border-green-500/40'
+            }`}
+            title="User Guide"
+          >
+            <BookOpen size={13} />
+            <span className="hidden sm:inline">User Guide</span>
+          </button>
+
           {page === 'dashboard' && <GlobalScanPanel apiBase={apiBase} />}
 
           {page === 'dashboard' && (
@@ -501,6 +515,8 @@ export default function App() {
       {/* MAIN CONTENT */}
       {page === 'settings' ? (
         <SettingsPage />
+      ) : page === 'guide' ? (
+        <UserGuide />
       ) : (
         <main className="max-w-screen-2xl mx-auto">
           {!selectedTenant ? (

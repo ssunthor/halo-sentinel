@@ -8,6 +8,7 @@
       {
         "category": "✨ Features",
         "items": [
+          "User Guide: full in-app documentation browser accessible from a 'User Guide' button (book icon) in the navigation bar — sidebar section navigation, prev/next pagination, and export to TXT, Markdown, or PDF (print dialog); covers overview, navigation, leaderboard, scanning, tenant detail, CVE scoring, recommended versions, email notifications, settings, and export",
           "Recommended version display: device list rows show a → amber version indicator beneath the current OS when NVD CPE data provides a minimum safe version; device detail modal shows it as RECOMMENDED: x.x.x in amber monospace below the OS line",
           "WYSIWYG email body editor: TipTap rich-text editor replaces plain textarea — toolbar with H1–H3, bold/italic/underline/strikethrough, link, image-by-URL, bullet/ordered list, blockquote, text alignment, undo/redo, clear formatting",
           "Image resize panel: inline panel below the editor toolbar for inserting images with URL and configurable width (25%/50%/75%/100%/Custom presets); clicking an existing image opens edit mode pre-filled with current values and adds a Remove button"

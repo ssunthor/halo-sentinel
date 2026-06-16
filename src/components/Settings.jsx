@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Bell, Settings2, ChevronLeft, Plus, Trash2, Send,
   CheckCircle, AlertTriangle, RefreshCw, ToggleLeft, ToggleRight,
-  Mail, Clock, Server,
+  Mail, Clock, Server, SlidersHorizontal, Search, X,
 } from 'lucide-react';
 import TagInput from './TagInput';
 import RichEditor from './RichEditor';
@@ -27,6 +27,8 @@ const DEFAULT_CONFIG = {
   schedule_time_utc: '00:00',
   schedule_day_of_week: 1,
   schedule_day_of_month: 1,
+  filter_tenant_ids: [],
+  filter_platforms: [],
 };
 
 const scheduleLabel = (cfg) => {
@@ -83,6 +85,87 @@ const StatusBanner = ({ status }) => {
 };
 
 // ---------------------------------------------------------------------------
+// MultiSelect — searchable checkbox list for tenant/vendor filtering
+// ---------------------------------------------------------------------------
+function MultiSelect({ options = [], value = [], onChange, placeholder = 'All', emptyMsg = 'No options available' }) {
+  const [search, setSearch] = useState('');
+
+  const filtered = options.filter(o =>
+    !search || o.label.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const toggle = (val) => {
+    if (value.includes(val)) onChange(value.filter(v => v !== val));
+    else onChange([...value, val]);
+  };
+
+  const selectAll  = () => onChange(options.map(o => o.value));
+  const clearAll   = () => onChange([]);
+
+  return (
+    <div className="border border-gray-700 rounded-lg overflow-hidden bg-gray-800/40">
+      {/* Summary + bulk actions */}
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/80 border-b border-gray-700">
+        <span className="text-xs text-gray-400 flex-grow">
+          {value.length === 0
+            ? <span className="text-gray-600">{placeholder}</span>
+            : <span className="text-green-400 font-semibold">{value.length} of {options.length} selected</span>
+          }
+        </span>
+        {options.length > 0 && (
+          <div className="flex items-center gap-2">
+            <button onClick={selectAll} className="text-[10px] text-gray-600 hover:text-white transition-colors">All</button>
+            <button onClick={clearAll}  className="text-[10px] text-gray-600 hover:text-white transition-colors">None</button>
+          </div>
+        )}
+      </div>
+
+      {/* Search */}
+      <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-gray-700">
+        <Search size={11} className="text-gray-600 flex-shrink-0" />
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Filter list…"
+          className="flex-grow bg-transparent text-xs text-white placeholder-gray-600 focus:outline-none"
+        />
+        {search && (
+          <button onClick={() => setSearch('')} className="text-gray-600 hover:text-white">
+            <X size={10} />
+          </button>
+        )}
+      </div>
+
+      {/* Checkbox list */}
+      <div className="max-h-44 overflow-y-auto">
+        {options.length === 0 ? (
+          <p className="px-3 py-5 text-xs text-gray-600 text-center">{emptyMsg}</p>
+        ) : filtered.length === 0 ? (
+          <p className="px-3 py-5 text-xs text-gray-600 text-center">No matches for "{search}"</p>
+        ) : (
+          filtered.map(opt => (
+            <label
+              key={opt.value}
+              className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-700/60 cursor-pointer border-b border-gray-800/60 last:border-0"
+            >
+              <input
+                type="checkbox"
+                checked={value.includes(opt.value)}
+                onChange={() => toggle(opt.value)}
+                className="w-3.5 h-3.5 accent-green-500 flex-shrink-0 rounded"
+              />
+              <span className="text-xs text-gray-300 flex-grow min-w-0 truncate">{opt.label}</span>
+              {opt.sub && <span className="text-[10px] text-gray-600 flex-shrink-0">{opt.sub}</span>}
+            </label>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Notification edit form
 // ---------------------------------------------------------------------------
 const NotificationForm = ({ initial, onSave, onBack }) => {
@@ -91,7 +174,46 @@ const NotificationForm = ({ initial, onSave, onBack }) => {
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState(null);
 
+  // Filter data
+  const [customers, setCustomers] = useState([]);
+  const [vendors, setVendors]     = useState([]);
+  const [vendorsLoading, setVendorsLoading] = useState(false);
+
   const set = (key, val) => setCfg(prev => ({ ...prev, [key]: val }));
+
+  // Load all scanned tenants once for the customer filter
+  useEffect(() => {
+    fetch(`${apiBase}/api/leaderboard?limit=500&min_devices=0`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setCustomers(
+        (Array.isArray(data) ? data : []).map(t => ({
+          value: t.tenant_id,
+          label: t.name,
+          sub: `${(t.total_devices || 0).toLocaleString()} devices`,
+        }))
+      ))
+      .catch(() => {});
+  }, []);
+
+  // Reload vendor list whenever customer selection changes
+  useEffect(() => {
+    const ids = cfg.filter_tenant_ids || [];
+    const qs = ids.length ? `?tenant_ids=${ids.join(',')}` : '';
+    setVendorsLoading(true);
+    fetch(`${apiBase}/api/config/vendors${qs}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        const list = Array.isArray(data) ? data : [];
+        setVendors(list.map(p => ({ value: p, label: p })));
+        // Drop any selected platforms that are no longer in the vendor list
+        setCfg(prev => ({
+          ...prev,
+          filter_platforms: (prev.filter_platforms || []).filter(p => list.includes(p)),
+        }));
+      })
+      .catch(() => {})
+      .finally(() => setVendorsLoading(false));
+  }, [cfg.filter_tenant_ids]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -139,6 +261,10 @@ const NotificationForm = ({ initial, onSave, onBack }) => {
       setTesting(false);
     }
   };
+
+  const filterSummary = [];
+  if ((cfg.filter_tenant_ids || []).length > 0) filterSummary.push(`${cfg.filter_tenant_ids.length} client${cfg.filter_tenant_ids.length !== 1 ? 's' : ''}`);
+  if ((cfg.filter_platforms || []).length > 0)  filterSummary.push(`${cfg.filter_platforms.length} platform${cfg.filter_platforms.length !== 1 ? 's' : ''}`);
 
   return (
     <div className="max-w-2xl">
@@ -252,6 +378,55 @@ const NotificationForm = ({ initial, onSave, onBack }) => {
           )}
         </div>
 
+        {/* ── Report Filters ── */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+              <SlidersHorizontal size={11} /> Report Filters
+            </div>
+            {filterSummary.length > 0 && (
+              <span className="text-[10px] font-semibold text-amber-400 bg-amber-900/20 border border-amber-700/40 px-2 py-0.5 rounded">
+                {filterSummary.join(' · ')}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-gray-600 -mt-1">
+            Leave both filters empty to include the full estate in every report.
+          </p>
+
+          <Field
+            label="Customer Filter"
+            hint="Select specific clients to include. Leave unchecked to include all clients."
+          >
+            <MultiSelect
+              options={customers}
+              value={cfg.filter_tenant_ids || []}
+              onChange={v => set('filter_tenant_ids', v)}
+              placeholder="All clients (no filter)"
+              emptyMsg="No scanned clients found — run a scan first."
+            />
+          </Field>
+
+          <Field
+            label="Platform / Vendor Filter"
+            hint={
+              vendorsLoading
+                ? 'Loading platforms…'
+                : (cfg.filter_tenant_ids || []).length > 0
+                  ? `Showing platforms used by the ${cfg.filter_tenant_ids.length} selected client${cfg.filter_tenant_ids.length !== 1 ? 's' : ''}. Leave unchecked to include all platforms.`
+                  : 'Showing all platforms across the estate. Leave unchecked to include all.'
+            }
+          >
+            <MultiSelect
+              options={vendors}
+              value={cfg.filter_platforms || []}
+              onChange={v => set('filter_platforms', v)}
+              placeholder="All platforms (no filter)"
+              emptyMsg={vendorsLoading ? 'Loading…' : 'No platform data found.'}
+            />
+          </Field>
+        </div>
+
         {/* ── Recipients ── */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
           <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">
@@ -333,6 +508,10 @@ const NotificationForm = ({ initial, onSave, onBack }) => {
 const NotificationCard = ({ cfg, onEdit, onDelete }) => {
   const [confirming, setConfirming] = useState(false);
 
+  const filterParts = [];
+  if ((cfg.filter_tenant_ids || []).length > 0) filterParts.push(`${cfg.filter_tenant_ids.length} client${cfg.filter_tenant_ids.length !== 1 ? 's' : ''}`);
+  if ((cfg.filter_platforms  || []).length > 0) filterParts.push(`${cfg.filter_platforms.length} platform${cfg.filter_platforms.length !== 1 ? 's' : ''}`);
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center gap-4">
       <div className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.enabled ? 'bg-green-400' : 'bg-gray-600'}`} />
@@ -348,6 +527,11 @@ const NotificationCard = ({ cfg, onEdit, onDelete }) => {
         <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-3 flex-wrap">
           <span><Clock size={10} className="inline mr-1" />{scheduleLabel(cfg)}</span>
           <span><Mail size={10} className="inline mr-1" />{(cfg.to_addresses || []).length} recipient{(cfg.to_addresses || []).length !== 1 ? 's' : ''}</span>
+          {filterParts.length > 0 && (
+            <span className="text-amber-500">
+              <SlidersHorizontal size={9} className="inline mr-1" />{filterParts.join(' · ')}
+            </span>
+          )}
           {cfg.last_sent_at && (
             <span>Last sent: {new Date(cfg.last_sent_at).toLocaleString()}</span>
           )}
@@ -394,7 +578,7 @@ const NotificationCard = ({ cfg, onEdit, onDelete }) => {
 const NotificationsTab = () => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading]             = useState(true);
-  const [editing, setEditing]             = useState(null); // null = list, {} = new, {id,...} = edit
+  const [editing, setEditing]             = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);

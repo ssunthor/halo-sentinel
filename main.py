@@ -1638,6 +1638,7 @@ def _write_cve_data_sheet(ws, rows: list):
 def _write_dashboard_sheet(ws, stats: dict, leaderboard: list):
     """Populate the Dashboard worksheet with estate stats and top-10 leaderboard."""
     from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
     NAVY = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
     SECT = PatternFill(start_color="2D2D2D", end_color="2D2D2D", fill_type="solid")
     ALT  = PatternFill(start_color="1C1C1C", end_color="1C1C1C", fill_type="solid")
@@ -1725,7 +1726,7 @@ def _write_dashboard_sheet(ws, stats: dict, leaderboard: list):
 
     # ── Column widths ─────────────────────────────────────────────────
     for col, width in enumerate([5, 28, 10, 12, 8, 11, 14, 10, 14], 1):
-        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+        ws.column_dimensions[get_column_letter(col)].width = width
 
 
 def _build_excel(rows: list, stats: dict | None = None, leaderboard: list | None = None) -> bytes:

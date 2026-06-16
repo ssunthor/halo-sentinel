@@ -616,6 +616,7 @@ def get_export_rows(
             d.platform_name,
             d.resource_type             AS device_type,
             d.os_version                AS current_firmware,
+            d.recommended_version,
             d.serial,
             d.highest_severity_score    AS cve_score,
             d.resource_category,

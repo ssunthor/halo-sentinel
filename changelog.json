@@ -36,6 +36,7 @@
         "category": "✨ Features",
         "items": [
           "GET /api/config/vendors: returns distinct platform_name values in use across the estate, optionally filtered by tenant_ids query param — used by the frontend to populate the dynamic vendor/platform filter list in notification settings",
+          "get_export_rows() now includes recommended_version in SELECT so the Recommended Firmware column in XLS exports is populated from NVD CPE data where available",
           "get_export_rows() extended with tenant_ids and platforms filter params: notification scheduler and test-send both pass active filter lists so emailed attachments contain only the filtered subset; get_vendors_for_tenants() returns platform names scoped to selected tenants",
           "Two-sheet Excel builder: _build_excel() now accepts optional stats + leaderboard params; when provided, creates a Dashboard sheet (estate summary + top-10 leaderboard with color-coded severity fills) as Sheet 1 and the CVE Data sheet as Sheet 2; _write_dashboard_sheet() and _write_cve_data_sheet() extracted as private helpers for reuse by both Export All and notification attachments",
           "DEFAULT_NOTIFICATION_CONFIG extended with filter_tenant_ids: [] and filter_platforms: [] fields (empty list = no filter / include all)",

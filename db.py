@@ -14,20 +14,22 @@ from datetime import datetime
 
 DB_PATH = os.path.join(os.getenv("CACHE_DIR", "/app/cache"), "cve_analyzer.db")
 
-_conn: sqlite3.Connection | None = None
+_local = threading.local()
 _write_lock = threading.Lock()
 
 
 def _connect() -> sqlite3.Connection:
-    global _conn
-    if _conn is None:
-        _conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-        _conn.row_factory = sqlite3.Row
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA foreign_keys=ON")
-        _conn.execute("PRAGMA synchronous=NORMAL")
-        _conn.execute("PRAGMA cache_size=-32000")
-    return _conn
+    """Return a per-thread SQLite connection (thread-local, WAL mode)."""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=True, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-32000")
+        _local.conn = conn
+    return conn
 
 
 def init_db():

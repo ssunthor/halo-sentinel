@@ -8,6 +8,8 @@
       {
         "category": "✨ Features",
         "items": [
+          "Scan trend tracking: every completed global scan is recorded in a new scan_history table; estate stat cards show delta badges (▲/▼ with color-coded good/bad direction) compared to the previous scan; new Scan Comparison panel shows current vs previous values for inventory (total, physical, VMs), exposure (vulnerable, critical, high, CVEs, peak score), and NVD query efficiency (cache hits, API calls, duration); collapsible Scan History table at the bottom shows all recorded scans in chronological order",
+          "Physical / VM breakdown: estate stats Total Devices card now includes a physical · VMs sub-line; Scan Comparison and Scan History panels both break out physical device and virtual machine counts independently",
           "User Guide: full in-app documentation browser accessible from a 'User Guide' button (book icon) in the navigation bar — sidebar section navigation, prev/next pagination, and export to TXT, Markdown, or PDF (print dialog); covers overview, navigation, leaderboard, scanning, tenant detail, CVE scoring, recommended versions, email notifications, settings, and export",
           "Recommended version display: device list rows show a → amber version indicator beneath the current OS when NVD CPE data provides a minimum safe version; device detail modal shows it as RECOMMENDED: x.x.x in amber monospace below the OS line",
           "WYSIWYG email body editor: TipTap rich-text editor replaces plain textarea — toolbar with H1–H3, bold/italic/underline/strikethrough, link, image-by-URL, bullet/ordered list, blockquote, text alignment, undo/redo, clear formatting",
@@ -31,6 +33,10 @@
       {
         "category": "✨ Features",
         "items": [
+          "Scan history table: new scan_history SQLite table records a snapshot after every completed global scan — scanned_at, duration_seconds, total/physical/VM device counts, vulnerable/critical/high device counts, total CVEs, peak score, NVD queried/cached/total counts; migration adds the table automatically on startup",
+          "GET /api/scan-history: returns the last N scan snapshots (default 20, max 50) for the history table in the frontend",
+          "GET /api/scan-trends: returns the two most recent scan snapshots plus computed integer/float deltas for every tracked metric — powers the delta badges on estate stat cards and the Scan Comparison panel",
+          "get_estate_stats() now returns physical_devices and virtual_machines breakdowns (resource_category = 'device' vs 'vm') alongside the existing totals",
           "Recommended version extraction: _extract_recommended_version() walks NVD CPE configuration data (cve.configurations[].nodes[].cpeMatch[]) collecting versionEndExcluding values across all CVEs and returns the semantic maximum — the minimum version that closes all known vulnerabilities; stored as recommended_version on each device",
           "Semantic version comparator: _version_key() splits version strings on . - _ and compares numerically per segment, correctly ordering strings like 17.9.4 > 17.3.10 that alphabetical sort would get wrong",
           "Dockerfile: email_report.py added to COPY directives so the module is included in the container image"

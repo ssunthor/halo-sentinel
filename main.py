@@ -1005,6 +1005,33 @@ async def run_global_scan():
         })
         print(f"✅ Global scan complete in {elapsed}s — {state['tenants_saved']} tenants, {state['total_devices']} devices, {state['unique_combos']} unique combos")
 
+        # Record a snapshot for trend tracking
+        try:
+            estate = db.get_estate_stats()
+            high_devs = db._connect().execute("""
+                SELECT COUNT(DISTINCT d.id) FROM devices d
+                JOIN cves c ON d.id = c.device_id WHERE c.score >= 7.0 AND c.score < 9.0
+            """).fetchone()[0] or 0
+            db.record_scan_snapshot({
+                "scan_type":         "global",
+                "scanned_at":        state["completed_at"],
+                "duration_seconds":  elapsed,
+                "total_tenants":     estate.get("total_tenants", 0),
+                "total_devices":     state.get("total_devices", 0),
+                "physical_devices":  state.get("physical_devices", 0),
+                "virtual_machines":  state.get("virtual_machines", 0),
+                "vulnerable_devices": estate.get("vulnerable_devices", 0),
+                "critical_devices":  estate.get("critical_devices", 0),
+                "high_devices":      high_devs,
+                "total_cves":        estate.get("total_cve_instances", 0),
+                "peak_score":        estate.get("max_score", 0.0),
+                "nvd_queried":       state.get("nvd_queried", 0),
+                "nvd_cached":        state.get("nvd_cached", 0),
+                "nvd_total":         state.get("nvd_total", 0),
+            })
+        except Exception as snap_err:
+            print(f"⚠️  Scan snapshot recording failed: {snap_err}")
+
     except Exception as e:
         elapsed = round(time.time() - t_start, 1)
         state.update({"status": "error", "error": str(e), "elapsed_seconds": elapsed})
@@ -1539,6 +1566,20 @@ async def get_ai_stats():
         "cache_hit_rate_pct": cache_rate,
         "total_llm_calls": total_calls,
     }
+
+
+@app.get("/api/scan-history")
+async def get_scan_history_endpoint(limit: int = 20):
+    """Return the most recent scan snapshots for trend analysis."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(thread_pool, db.get_scan_history, min(limit, 50))
+
+
+@app.get("/api/scan-trends")
+async def get_scan_trends_endpoint():
+    """Return the two most recent scan snapshots plus computed deltas."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(thread_pool, db.get_scan_trends)
 
 
 def _build_excel(rows: list) -> bytes:

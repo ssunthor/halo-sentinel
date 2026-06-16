@@ -96,6 +96,27 @@ def init_db():
                 updated_at  TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS scan_history (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                scanned_at          TEXT NOT NULL,
+                scan_type           TEXT DEFAULT 'global',
+                duration_seconds    REAL,
+                total_tenants       INTEGER,
+                total_devices       INTEGER,
+                physical_devices    INTEGER,
+                virtual_machines    INTEGER,
+                vulnerable_devices  INTEGER,
+                critical_devices    INTEGER,
+                high_devices        INTEGER,
+                total_cves          INTEGER,
+                peak_score          REAL,
+                nvd_queried         INTEGER,
+                nvd_cached          INTEGER,
+                nvd_total           INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scan_history_at ON scan_history(scanned_at DESC);
+
             CREATE INDEX IF NOT EXISTS idx_devices_tenant        ON devices(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_devices_score         ON devices(highest_severity_score DESC);
             CREATE INDEX IF NOT EXISTS idx_cves_device           ON cves(device_id);
@@ -364,12 +385,14 @@ def get_estate_stats() -> dict:
     conn = _connect()
     row = conn.execute("""
         SELECT
-            COUNT(DISTINCT tenant_id)               AS total_tenants,
-            COUNT(*)                                AS total_devices,
-            SUM(is_vulnerable)                      AS vulnerable_devices,
-            MAX(highest_severity_score)             AS max_score,
-            (SELECT COUNT(*) FROM cves)             AS total_cve_instances,
-            (SELECT MAX(scanned_at) FROM tenants)   AS last_scan
+            COUNT(DISTINCT tenant_id)                                           AS total_tenants,
+            COUNT(*)                                                             AS total_devices,
+            SUM(CASE WHEN resource_category = 'device' THEN 1 ELSE 0 END)      AS physical_devices,
+            SUM(CASE WHEN resource_category = 'vm'     THEN 1 ELSE 0 END)      AS virtual_machines,
+            SUM(is_vulnerable)                                                   AS vulnerable_devices,
+            MAX(highest_severity_score)                                          AS max_score,
+            (SELECT COUNT(*) FROM cves)                                          AS total_cve_instances,
+            (SELECT MAX(scanned_at) FROM tenants)                                AS last_scan
         FROM devices
     """).fetchone()
 
@@ -381,6 +404,8 @@ def get_estate_stats() -> dict:
     d = dict(row)
     d["critical_devices"] = critical_devices
     d["vulnerable_devices"] = d["vulnerable_devices"] or 0
+    d["physical_devices"]   = d["physical_devices"] or 0
+    d["virtual_machines"]   = d["virtual_machines"] or 0
     return d
 
 
@@ -603,6 +628,78 @@ def migrate_from_json(cache_dir: str) -> int:
     if migrated:
         print(f"✅ Migrated {migrated} JSON cache(s) → SQLite")
     return migrated
+
+
+# ---------------------------------------------------------------------------
+# Scan history / trending
+# ---------------------------------------------------------------------------
+
+def record_scan_snapshot(data: dict):
+    """Append one row to scan_history after a scan completes."""
+    conn = _connect()
+    with _write_lock:
+        conn.execute("""
+            INSERT INTO scan_history
+                (scanned_at, scan_type, duration_seconds, total_tenants,
+                 total_devices, physical_devices, virtual_machines,
+                 vulnerable_devices, critical_devices, high_devices,
+                 total_cves, peak_score, nvd_queried, nvd_cached, nvd_total)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            data.get("scanned_at"),
+            data.get("scan_type", "global"),
+            data.get("duration_seconds"),
+            data.get("total_tenants"),
+            data.get("total_devices"),
+            data.get("physical_devices"),
+            data.get("virtual_machines"),
+            data.get("vulnerable_devices"),
+            data.get("critical_devices"),
+            data.get("high_devices"),
+            data.get("total_cves"),
+            data.get("peak_score"),
+            data.get("nvd_queried"),
+            data.get("nvd_cached"),
+            data.get("nvd_total"),
+        ))
+        conn.commit()
+
+
+def get_scan_history(limit: int = 20) -> list[dict]:
+    rows = _connect().execute(
+        "SELECT * FROM scan_history ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_scan_trends() -> dict:
+    """Return the two most recent scan snapshots plus computed deltas."""
+    rows = _connect().execute(
+        "SELECT * FROM scan_history ORDER BY id DESC LIMIT 2"
+    ).fetchall()
+    if not rows:
+        return {"current": None, "previous": None, "deltas": {}}
+
+    current = dict(rows[0])
+    previous = dict(rows[1]) if len(rows) > 1 else None
+
+    if not previous:
+        return {"current": current, "previous": None, "deltas": {}}
+
+    int_keys = [
+        "total_tenants", "total_devices", "physical_devices", "virtual_machines",
+        "vulnerable_devices", "critical_devices", "high_devices", "total_cves",
+        "nvd_queried", "nvd_cached", "nvd_total",
+    ]
+    float_keys = ["peak_score", "duration_seconds"]
+
+    deltas: dict = {}
+    for k in int_keys:
+        deltas[k] = int(current.get(k) or 0) - int(previous.get(k) or 0)
+    for k in float_keys:
+        deltas[k] = round(float(current.get(k) or 0.0) - float(previous.get(k) or 0.0), 2)
+
+    return {"current": current, "previous": previous, "deltas": deltas}
 
 
 # ---------------------------------------------------------------------------

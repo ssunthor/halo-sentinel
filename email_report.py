@@ -26,7 +26,7 @@ from typing import Optional
 
 def _build_stats_block(estate_stats: dict, leaderboard: list) -> str:
     """Return a plain-text stats summary to append after the preamble."""
-    e = estate_stats.get("estate", {})
+    e = estate_stats
     lines = [
         "=" * 60,
         "ESTATE SUMMARY",
@@ -70,7 +70,7 @@ def _build_stats_block(estate_stats: dict, leaderboard: list) -> str:
 # ---------------------------------------------------------------------------
 
 def _render_subject(template: str, estate_stats: dict) -> str:
-    e = estate_stats.get("estate", {})
+    e = estate_stats
     now = datetime.now(timezone.utc)
     return (
         template

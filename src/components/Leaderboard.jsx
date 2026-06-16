@@ -3,7 +3,7 @@ import {
   Shield, TrendingUp, TrendingDown, Minus, RefreshCw, Download,
   ChevronUp, ChevronDown, Search, X, AlertTriangle, Activity,
   Server, Layers, Bug, Cpu, Zap, Clock, CheckCircle2, DatabaseZap,
-  BarChart3, ListTodo,
+  BarChart3, ListTodo, History, ArrowUp, ArrowDown,
 } from 'lucide-react';
 import { InfoTip } from './Tooltip';
 
@@ -52,6 +52,12 @@ const formatAge = (iso) => {
   return `${Math.round(h / 24)}d ago`;
 };
 
+const fmtDate = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
 const fmt = (n) => (n ?? 0).toLocaleString();
 
 const TrendIcon = ({ trend }) => {
@@ -67,16 +73,39 @@ const SortIcon = ({ field, current, dir }) =>
     : <span className="opacity-20"><ChevronDown size={11} /></span>;
 
 // ---------------------------------------------------------------------------
+// Delta badge — shown beneath the main value in stat cards
+// ---------------------------------------------------------------------------
+function DeltaBadge({ delta, goodWhenDown = false, decimals = 0, suffix = '' }) {
+  if (delta == null || delta === 0) return <span className="text-gray-700 text-[10px]">no change</span>;
+  const isUp = delta > 0;
+  const isGood = goodWhenDown ? !isUp : isUp;
+  const color = isGood ? 'text-green-400' : 'text-red-400';
+  const Icon = isUp ? ArrowUp : ArrowDown;
+  const abs = decimals > 0 ? Math.abs(delta).toFixed(decimals) : Math.abs(delta).toLocaleString();
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-bold ${color}`}>
+      <Icon size={9} />
+      {isUp ? '+' : '-'}{abs}{suffix}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Sub-panels
 // ---------------------------------------------------------------------------
-const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', wide, tooltip }) => (
-  <div className={`bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-1 ${wide ? 'md:col-span-2' : ''}`}>
+const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', tooltip, delta, deltaGoodWhenDown, deltaSuffix, deltaDecimals }) => (
+  <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-1">
     <div className="flex items-center gap-1.5 text-gray-500 text-xs uppercase tracking-wider font-semibold">
       {Icon && <Icon size={12} />}{label}
       {tooltip && <InfoTip content={tooltip} position="bottom" size={10} />}
     </div>
     <div className={`text-2xl font-black font-mono ${accent}`}>{value}</div>
-    {sub && <div className="text-xs text-gray-600">{sub}</div>}
+    <div className="flex items-center gap-2 min-h-[16px]">
+      {sub && <div className="text-xs text-gray-600">{sub}</div>}
+      {delta != null && (
+        <DeltaBadge delta={delta} goodWhenDown={deltaGoodWhenDown} suffix={deltaSuffix} decimals={deltaDecimals} />
+      )}
+    </div>
   </div>
 );
 
@@ -189,23 +218,163 @@ const TopCvesPanel = ({ cves }) => (
 );
 
 // ---------------------------------------------------------------------------
-// Leaderboard table
+// Scan Trends Panel
 // ---------------------------------------------------------------------------
-const RankBadge = ({ rank }) => {
-  if (rank === 1) return <span className="font-bold text-yellow-400 font-mono">🥇</span>;
-  if (rank === 2) return <span className="font-bold text-gray-300 font-mono">🥈</span>;
-  if (rank === 3) return <span className="font-bold text-orange-500 font-mono">🥉</span>;
-  return <span className="text-gray-700 font-mono text-xs w-5 text-right">{rank}</span>;
-};
+function ScanTrendsPanel({ trends }) {
+  const { current, previous, deltas } = trends || {};
 
-const ThBtn = ({ children, field, current, dir, onSort }) => (
-  <button
-    onClick={() => onSort(field)}
-    className="flex items-center gap-1 hover:text-white transition-colors"
-  >
-    {children}<SortIcon field={field} current={current} dir={dir} />
-  </button>
-);
+  const TrendRow = ({ label, curr, delta, goodWhenDown = false, decimals = 0, accent, suffix = '' }) => (
+    <div className="flex items-center justify-between py-1.5 border-b border-gray-800/40 last:border-0">
+      <span className="text-xs text-gray-400">{label}</span>
+      <div className="flex items-center gap-2.5">
+        <span className={`font-mono text-sm font-bold ${accent || 'text-white'}`}>
+          {decimals > 0 ? (curr || 0).toFixed(decimals) : fmt(curr || 0)}{suffix}
+        </span>
+        <div className="w-12 flex justify-end">
+          {previous ? (
+            <DeltaBadge delta={delta} goodWhenDown={goodWhenDown} decimals={decimals} suffix={suffix} />
+          ) : (
+            <span className="text-gray-700 text-[10px]">—</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const SectionLabel = ({ children }) => (
+    <div className="text-[10px] text-gray-600 uppercase tracking-wider font-semibold mt-3 mb-1 pt-2 border-t border-gray-800/40 first:border-0 first:mt-0 first:pt-0">
+      {children}
+    </div>
+  );
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+          <TrendingUp size={10} className="text-green-400" /> Scan Comparison
+          <InfoTip content="Comparison of the current scan vs the previous scan. Arrows indicate direction of change. Green = improvement, Red = decline (context-sensitive: more devices is good, more CVEs is bad)." position="bottom" />
+        </div>
+        {previous && (
+          <span className="text-[10px] text-gray-600 font-mono">vs {formatAge(previous.scanned_at)}</span>
+        )}
+      </div>
+
+      {!current ? (
+        <p className="text-xs text-gray-600 py-4 text-center">No scan data yet.</p>
+      ) : !previous ? (
+        <p className="text-xs text-gray-600 py-4 text-center">Run a second scan to see trends.</p>
+      ) : (
+        <>
+          <SectionLabel>Inventory</SectionLabel>
+          <TrendRow label="Total Devices"    curr={current.total_devices}    delta={deltas?.total_devices} />
+          <TrendRow label="Physical Devices" curr={current.physical_devices}  delta={deltas?.physical_devices} />
+          <TrendRow label="Virtual Machines" curr={current.virtual_machines}  delta={deltas?.virtual_machines} />
+
+          <SectionLabel>Exposure</SectionLabel>
+          <TrendRow label="Vulnerable Devices" curr={current.vulnerable_devices} delta={deltas?.vulnerable_devices} goodWhenDown accent={current.vulnerable_devices > 0 ? 'text-orange-400' : 'text-green-400'} />
+          <TrendRow label="Critical Devices"   curr={current.critical_devices}   delta={deltas?.critical_devices}   goodWhenDown accent={current.critical_devices > 0 ? 'text-red-400' : 'text-green-400'} />
+          <TrendRow label="High Devices"       curr={current.high_devices}       delta={deltas?.high_devices}       goodWhenDown accent={current.high_devices > 0 ? 'text-orange-400' : 'text-green-400'} />
+          <TrendRow label="Total CVEs"         curr={current.total_cves}         delta={deltas?.total_cves}         goodWhenDown accent="text-yellow-400" />
+          <TrendRow label="Peak Score"         curr={current.peak_score}         delta={deltas?.peak_score}         goodWhenDown decimals={1} accent={scoreColor(current.peak_score)} />
+
+          <SectionLabel>NVD Query Efficiency</SectionLabel>
+          <TrendRow label="Cache Hits"  curr={current.nvd_cached}  delta={deltas?.nvd_cached}  accent="text-blue-400" />
+          <TrendRow label="API Calls"   curr={current.nvd_queried} delta={deltas?.nvd_queried} goodWhenDown />
+          <TrendRow label="Unique Combos" curr={current.nvd_total} delta={deltas?.nvd_total} />
+          {current.duration_seconds != null && (
+            <TrendRow label="Scan Duration" curr={Math.round(current.duration_seconds)} delta={deltas?.duration_seconds ? Math.round(deltas.duration_seconds) : 0} goodWhenDown suffix="s" />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scan History Panel (collapsible table)
+// ---------------------------------------------------------------------------
+function ScanHistoryPanel({ apiBase }) {
+  const [history, setHistory] = useState([]);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    fetch(`${apiBase}/api/scan-history?limit=10`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setHistory(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [apiBase]);
+
+  if (history.length === 0) return null;
+
+  const Th = ({ children, right }) => (
+    <th className={`px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500 ${right ? 'text-right' : 'text-left'} border-b border-gray-800`}>
+      {children}
+    </th>
+  );
+  const Td = ({ children, accent, mono, right }) => (
+    <td className={`px-3 py-2 text-xs border-b border-gray-800/50 ${right ? 'text-right' : ''} ${mono ? 'font-mono' : ''} ${accent || 'text-gray-400'}`}>
+      {children}
+    </td>
+  );
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-800/40 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <History size={12} className="text-green-400" />
+          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+            Scan History — {history.length} record{history.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+        {expanded ? <ChevronUp size={13} className="text-gray-600" /> : <ChevronDown size={13} className="text-gray-600" />}
+      </button>
+
+      {expanded && (
+        <div className="overflow-x-auto border-t border-gray-800">
+          <table className="w-full">
+            <thead className="bg-gray-900/80">
+              <tr>
+                <Th>Date / Time</Th>
+                <Th right>Devices</Th>
+                <Th right>Physical</Th>
+                <Th right>VMs</Th>
+                <Th right>Vulnerable</Th>
+                <Th right>Critical</Th>
+                <Th right>High</Th>
+                <Th right>CVEs</Th>
+                <Th right>Peak</Th>
+                <Th right>NVD Hits</Th>
+                <Th right>NVD Calls</Th>
+                <Th right>Duration</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((row, i) => (
+                <tr key={row.id} className={i % 2 === 0 ? 'bg-gray-950/40' : ''}>
+                  <Td mono>{fmtDate(row.scanned_at)}</Td>
+                  <Td mono right>{fmt(row.total_devices)}</Td>
+                  <Td mono right>{fmt(row.physical_devices)}</Td>
+                  <Td mono right>{fmt(row.virtual_machines)}</Td>
+                  <Td mono right accent={row.vulnerable_devices > 0 ? 'text-orange-400' : 'text-green-500'}>{fmt(row.vulnerable_devices)}</Td>
+                  <Td mono right accent={row.critical_devices > 0 ? 'text-red-400' : 'text-gray-600'}>{fmt(row.critical_devices)}</Td>
+                  <Td mono right accent={row.high_devices > 0 ? 'text-orange-400' : 'text-gray-600'}>{fmt(row.high_devices)}</Td>
+                  <Td mono right accent="text-yellow-400">{fmt(row.total_cves)}</Td>
+                  <Td mono right accent={scoreColor(row.peak_score)}>{(row.peak_score || 0).toFixed(1)}</Td>
+                  <Td mono right accent="text-blue-400">{fmt(row.nvd_cached)}</Td>
+                  <Td mono right>{fmt(row.nvd_queried)}</Td>
+                  <Td mono right>{row.duration_seconds != null ? `${Math.round(row.duration_seconds)}s` : '—'}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // AI Worker Stats panel
@@ -342,11 +511,31 @@ const AiStatsPanel = ({ apiBase }) => {
 
 
 // ---------------------------------------------------------------------------
+// Leaderboard table
+// ---------------------------------------------------------------------------
+const RankBadge = ({ rank }) => {
+  if (rank === 1) return <span className="font-bold text-yellow-400 font-mono">🥇</span>;
+  if (rank === 2) return <span className="font-bold text-gray-300 font-mono">🥈</span>;
+  if (rank === 3) return <span className="font-bold text-orange-500 font-mono">🥉</span>;
+  return <span className="text-gray-700 font-mono text-xs w-5 text-right">{rank}</span>;
+};
+
+const ThBtn = ({ children, field, current, dir, onSort }) => (
+  <button
+    onClick={() => onSort(field)}
+    className="flex items-center gap-1 hover:text-white transition-colors"
+  >
+    {children}<SortIcon field={field} current={current} dir={dir} />
+  </button>
+);
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function Leaderboard({ apiBase, onSelectTenant }) {
   const [stats, setStats] = useState(null);
   const [rows, setRows] = useState([]);
+  const [trends, setTrends] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('max_score');
@@ -355,14 +544,16 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [sRes, lRes] = await Promise.all([
+      const [sRes, lRes, tRes] = await Promise.all([
         fetch(`${apiBase}/api/stats`),
         fetch(`${apiBase}/api/leaderboard?limit=500`),
+        fetch(`${apiBase}/api/scan-trends`),
       ]);
       if (!sRes.ok || !lRes.ok) throw new Error('API error');
       const [sData, lData] = await Promise.all([sRes.json(), lRes.json()]);
       setStats(sData);
       setRows(lData);
+      if (tRes.ok) setTrends(await tRes.json());
       setError(null);
     } catch (e) {
       setError('Could not load leaderboard data. Make sure the backend is running.');
@@ -398,6 +589,8 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
     });
 
   const estate = stats?.estate || {};
+  const d = trends?.deltas || {};
+  const hasTrend = !!trends?.previous;
 
   const handleExportAll = () => {
     window.open(`${apiBase}/api/export/all`, '_blank');
@@ -467,31 +660,67 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
         <>
           {/* ── Estate stat cards ── */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <StatCard icon={Shield}    label="Clients Scanned"    value={fmt(estate.total_tenants)}     accent="text-green-400"
-              tooltip="Number of unique NetBox tenants that have been scanned at least once. Click any client row in the rankings table to view its full vulnerability report." />
-            <StatCard icon={Server}    label="Total Devices"      value={fmt(estate.total_devices)}
-              tooltip="Total physical devices and virtual machines across all scanned tenants. Includes devices with and without CVE data." />
-            <StatCard icon={AlertTriangle} label="Vulnerable"     value={fmt(estate.vulnerable_devices)}
+            <StatCard
+              icon={Shield} label="Clients Scanned" accent="text-green-400"
+              value={fmt(estate.total_tenants)}
+              delta={hasTrend ? d.total_tenants : null}
+              tooltip="Number of unique NetBox tenants that have been scanned at least once. Click any client row in the rankings table to view its full vulnerability report."
+            />
+            <StatCard
+              icon={Server} label="Total Devices"
+              value={fmt(estate.total_devices)}
+              sub={estate.physical_devices || estate.virtual_machines
+                ? `${fmt(estate.physical_devices)} physical · ${fmt(estate.virtual_machines)} VMs`
+                : undefined}
+              delta={hasTrend ? d.total_devices : null}
+              tooltip="Total physical devices and virtual machines across all scanned tenants. Sub-line shows the physical/VM split."
+            />
+            <StatCard
+              icon={AlertTriangle} label="Vulnerable" accent="text-orange-400"
+              value={fmt(estate.vulnerable_devices)}
               sub={estate.total_devices ? `${Math.round(100 * (estate.vulnerable_devices || 0) / estate.total_devices)}% of estate` : ''}
-              accent="text-orange-400"
-              tooltip="Devices where the NVD API returned at least one matching CVE. The percentage shows how much of the total estate is affected." />
-            <StatCard icon={AlertTriangle} label="Critical Devices" value={fmt(estate.critical_devices)}
-              sub="CVE score ≥ 9.0" accent={estate.critical_devices > 0 ? 'text-red-500' : 'text-green-400'}
-              tooltip="Devices carrying at least one CVE with a CVSS score of 9.0 or higher. These represent the highest-severity exposure and should be prioritized for immediate patching." />
-            <StatCard icon={Bug}       label="CVE Instances"     value={fmt(estate.total_cve_instances)} accent="text-yellow-400"
-              tooltip="Total count of individual CVE matches across all devices and all tenants. One device can contribute multiple CVE instances if multiple vulnerabilities were found." />
-            <StatCard icon={Activity}  label="Peak CVE Score"    value={(estate.max_score || 0).toFixed(1)}
+              delta={hasTrend ? d.vulnerable_devices : null}
+              deltaGoodWhenDown
+              tooltip="Devices where the NVD API returned at least one matching CVE. The percentage shows how much of the total estate is affected."
+            />
+            <StatCard
+              icon={AlertTriangle} label="Critical Devices"
+              accent={estate.critical_devices > 0 ? 'text-red-500' : 'text-green-400'}
+              value={fmt(estate.critical_devices)}
+              sub="CVE score ≥ 9.0"
+              delta={hasTrend ? d.critical_devices : null}
+              deltaGoodWhenDown
+              tooltip="Devices carrying at least one CVE with a CVSS score of 9.0 or higher. These represent the highest-severity exposure and should be prioritized for immediate patching."
+            />
+            <StatCard
+              icon={Bug} label="CVE Instances" accent="text-yellow-400"
+              value={fmt(estate.total_cve_instances)}
+              delta={hasTrend ? d.total_cves : null}
+              deltaGoodWhenDown
+              tooltip="Total count of individual CVE matches across all devices and all tenants. One device can contribute multiple CVE instances if multiple vulnerabilities were found."
+            />
+            <StatCard
+              icon={Activity} label="Peak CVE Score"
               accent={scoreColor(estate.max_score)}
-              tooltip="Highest individual CVE CVSS score found anywhere in the estate. A score of 10.0 is the maximum. This is the single most severe known vulnerability in the environment." />
+              value={(estate.max_score || 0).toFixed(1)}
+              delta={hasTrend ? d.peak_score : null}
+              deltaGoodWhenDown
+              deltaDecimals={1}
+              tooltip="Highest individual CVE CVSS score found anywhere in the estate. A score of 10.0 is the maximum. This is the single most severe known vulnerability in the environment."
+            />
           </div>
 
           {/* ── Info panels ── */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
             <SeverityPanel breakdown={stats?.severity_breakdown} />
             <PlatformPanel platforms={stats?.top_platforms} />
             <TopCvesPanel cves={stats?.top_cves} />
+            <ScanTrendsPanel trends={trends} />
             <AiStatsPanel apiBase={apiBase} />
           </div>
+
+          {/* ── Scan history ── */}
+          <ScanHistoryPanel apiBase={apiBase} />
 
           {/* ── Leaderboard table ── */}
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">

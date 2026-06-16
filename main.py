@@ -344,6 +344,38 @@ def _build_nvd_query(os_name: str, os_version: str) -> str | None:
     return f"{os_name} {version_clean}" if version_clean else os_name
 
 
+def _version_key(v: str) -> tuple:
+    """Semantic version tuple for comparison. '17.9.4' → (17, 9, 4)."""
+    parts = []
+    for seg in re.split(r'[.\-_]', v or ''):
+        m = re.match(r'^(\d+)', seg)
+        if m:
+            parts.append(int(m.group(1)))
+    return tuple(parts) if parts else (0,)
+
+
+def _extract_recommended_version(cves_data: dict) -> str | None:
+    """
+    Scan NVD CPE configuration data across all CVEs and return the highest
+    versionEndExcluding (or versionEndIncluding as fallback), which represents
+    the minimum version that closes all known vulnerabilities.
+    Returns None if no structured version range data is present.
+    """
+    candidates = []
+    for item in cves_data.get("vulnerabilities", []):
+        for config in item.get("cve", {}).get("configurations", []):
+            for node in config.get("nodes", []):
+                for match in node.get("cpeMatch", []):
+                    if not match.get("vulnerable"):
+                        continue
+                    v = match.get("versionEndExcluding") or match.get("versionEndIncluding")
+                    if v and v.strip():
+                        candidates.append(v.strip())
+    if not candidates:
+        return None
+    return max(candidates, key=_version_key)
+
+
 def _parse_cve_response(cves_data: dict) -> tuple[list, float]:
     """Parse an NVD CVE response into (cve_list, highest_score)."""
     device_cves, highest = [], 0.0
@@ -448,6 +480,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
     try:
         device_cves, highest = _parse_cve_response(final_cves_data)
+        recommended_version = _extract_recommended_version(final_cves_data)
 
         partial_res = {
             "resource_name": resource_name,
@@ -456,6 +489,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "resource_category": resource_type,
             "platform_name": os_name,
             "os_version": os_version,
+            "recommended_version": recommended_version,
             "serial": serial,
             "pon": pon,
             "highest_severity_score": highest,
@@ -492,6 +526,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "resource_category": resource_type,
             "platform_name": os_name,
             "os_version": os_version,
+            "recommended_version": None,
             "serial": serial,
             "pon": pon,
             "highest_severity_score": 0.0,
@@ -883,7 +918,8 @@ async def run_global_scan():
             tenant_names: dict[str, str] = {}
             scan_ts = datetime.utcnow().isoformat()
 
-            def _make_record(d: dict, device_cves: list, highest: float) -> dict:
+            def _make_record(d: dict, device_cves: list, highest: float,
+                             recommended_version: str | None = None) -> dict:
                 rtype = d.get("_rtype", "device")
                 pinfo = d.get("platform")
                 os_name = pinfo.get("name") if pinfo else None
@@ -905,6 +941,7 @@ async def run_global_scan():
                     "resource_category": rtype,
                     "platform_name": os_name,
                     "os_version": os_version,
+                    "recommended_version": recommended_version,
                     "serial": serial,
                     "pon": pon,
                     "highest_severity_score": highest,
@@ -916,6 +953,7 @@ async def run_global_scan():
             for query, devs in combo_map.items():
                 cves_data = nvd_results.get(query, {"vulnerabilities": []})
                 device_cves, highest = _parse_cve_response(cves_data)
+                recommended_version = _extract_recommended_version(cves_data)
                 for d in devs:
                     tenant = d.get("tenant") or {}
                     tid = str(tenant.get("id", ""))
@@ -923,7 +961,9 @@ async def run_global_scan():
                     if not tid:
                         continue
                     tenant_names[tid] = tname
-                    tenant_devices.setdefault(tid, []).append(_make_record(d, device_cves, highest))
+                    tenant_devices.setdefault(tid, []).append(
+                        _make_record(d, device_cves, highest, recommended_version)
+                    )
                     if device_cves:
                         state["devices_with_cves"] += 1
 

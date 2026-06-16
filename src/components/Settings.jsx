@@ -183,7 +183,7 @@ const NotificationForm = ({ initial, onSave, onBack }) => {
 
   // Load all scanned tenants once for the customer filter
   useEffect(() => {
-    fetch(`${apiBase}/api/leaderboard?limit=500&min_devices=0`)
+    fetch(`${apiBase}/api/tenants`)
       .then(r => r.ok ? r.json() : [])
       .then(data => setCustomers(
         (Array.isArray(data) ? data : []).map(t => ({

@@ -556,8 +556,13 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                   </h3>
                   <p className="text-xs text-gray-500 truncate">{device.resource_type}</p>
                 </div>
-                <div className="flex-shrink-0 w-48 text-xs text-green-500/70 truncate text-right hidden md:block" title={device.os}>
-                  {device.os}
+                <div className="flex-shrink-0 w-48 min-w-0 hidden md:flex flex-col items-end gap-0.5">
+                  <span className="text-xs text-green-500/70 truncate max-w-full" title={device.os}>{device.os}</span>
+                  {device.recommended_version && (
+                    <span className="text-[10px] text-amber-400/80 font-mono truncate max-w-full" title={`Recommended: ${device.recommended_version}`}>
+                      → {device.recommended_version}
+                    </span>
+                  )}
                 </div>
                 <div className="flex-shrink-0 w-20 text-right">
                   {device.llm_analysis === 'Scanning...' ? (
@@ -621,6 +626,12 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
               <div>
                 <h2 className="text-2xl font-bold text-green-500">{(selectedDevice.resource_name || '').toUpperCase()}</h2>
                 <p className="text-xs text-gray-500 mt-1">{selectedDevice.resource_type} · {selectedDevice.os}</p>
+                {selectedDevice.recommended_version && (
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <span className="text-[10px] text-gray-600 uppercase tracking-wider">Recommended:</span>
+                    <span className="text-xs font-mono font-bold text-amber-400">{selectedDevice.recommended_version}</span>
+                  </div>
+                )}
               </div>
               <button onClick={() => setSelectedDevice(null)} className="text-gray-400 hover:text-white p-1">
                 <X size={20} />

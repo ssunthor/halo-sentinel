@@ -2,6 +2,51 @@
   {
     "id": "FRONTEND",
     "service": "Dashboard Frontend",
+    "version": "2026.06.16",
+    "date": "2026-06-16",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Recommended version display: device list rows show a → amber version indicator beneath the current OS when NVD CPE data provides a minimum safe version; device detail modal shows it as RECOMMENDED: x.x.x in amber monospace below the OS line",
+          "WYSIWYG email body editor: TipTap rich-text editor replaces plain textarea — toolbar with H1–H3, bold/italic/underline/strikethrough, link, image-by-URL, bullet/ordered list, blockquote, text alignment, undo/redo, clear formatting",
+          "Image resize panel: inline panel below the editor toolbar for inserting images with URL and configurable width (25%/50%/75%/100%/Custom presets); clicking an existing image opens edit mode pre-filled with current values and adds a Remove button"
+        ]
+      },
+      {
+        "category": "🔧 Improvements",
+        "items": [
+          "Email dark theme: redesigned to match dashboard exactly — pure black (#000000) body, monospace font throughout data sections, green-500 header divider, section labels styled as 10px uppercase tracking-widest gray, amber score badges"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "BACKEND",
+    "service": "Backend API",
+    "version": "2026.06.16",
+    "date": "2026-06-16",
+    "changes": [
+      {
+        "category": "✨ Features",
+        "items": [
+          "Recommended version extraction: _extract_recommended_version() walks NVD CPE configuration data (cve.configurations[].nodes[].cpeMatch[]) collecting versionEndExcluding values across all CVEs and returns the semantic maximum — the minimum version that closes all known vulnerabilities; stored as recommended_version on each device",
+          "Semantic version comparator: _version_key() splits version strings on . - _ and compares numerically per segment, correctly ordering strings like 17.9.4 > 17.3.10 that alphabetical sort would get wrong",
+          "Dockerfile: email_report.py added to COPY directives so the module is included in the container image"
+        ]
+      },
+      {
+        "category": "🐛 Fixes",
+        "items": [
+          "Email estate stats were always zero: _build_stats_block and _render_subject wrapped estate_stats in a redundant .get('estate', {}) lookup that never matched — fixed to read the flat dict directly",
+          "HTML email converted from plain text: MIME structure is now multipart/mixed → multipart/alternative → text/plain + text/html + xlsx attachment; estate summary and top-10 clients rendered as inline-styled HTML tables compatible with major email clients"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "FRONTEND",
+    "service": "Dashboard Frontend",
     "version": "2026.06.15b",
     "date": "2026-06-15",
     "changes": [

@@ -27,7 +27,6 @@ def _score_color(score: float) -> str:
 
 
 def _html_to_text(html: str) -> str:
-    """Strip HTML tags for the plain-text fallback."""
     text = re.sub(r"<[^>]+>", " ", html or "")
     text = re.sub(r"\s+", " ", text)
     return unescape(text).strip()
@@ -42,7 +41,7 @@ def _is_empty_html(html: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _render_subject(template: str, estate_stats: dict) -> str:
-    e = estate_stats
+    e   = estate_stats
     now = datetime.now(timezone.utc)
     return (
         template
@@ -56,175 +55,198 @@ def _render_subject(template: str, estate_stats: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# HTML email builder
+# HTML email builder  (dashboard dark palette)
 # ---------------------------------------------------------------------------
 
+# Color tokens matching the dashboard (gray-950/900/800, green-400/500)
+_C = dict(
+    bg_outer   = "#030712",   # near-black wrapper
+    bg_card    = "#111827",   # gray-900
+    bg_section = "#1f2937",   # gray-800 alternate row
+    border     = "#374151",   # gray-700
+    text_pri   = "#f9fafb",   # white
+    text_sec   = "#9ca3af",   # gray-400
+    text_label = "#6b7280",   # gray-500
+    accent     = "#34d399",   # emerald-400
+    divider    = "#22c55e",   # green-500
+)
+
+
+def _td(bg, border, padding, style_extra, content):
+    """Emit a <td> with both bgcolor attr and inline background-color."""
+    return (
+        f'<td bgcolor="{bg}" style="background-color:{bg};border:{border};'
+        f'padding:{padding};{style_extra}">{content}</td>'
+    )
+
+
 def _build_html(estate_stats: dict, leaderboard: list, preamble_html: str, subject: str) -> str:
+    C       = _C
     e       = estate_stats
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    # ── Preamble ──
+    # ── Preamble ─────────────────────────────────────────────────────────────
     preamble_block = ""
     if not _is_empty_html(preamble_html):
-        preamble_block = f"""
-    <tr>
-      <td style="padding:24px 32px 0 32px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.65;color:#374151;">
-        {preamble_html}
-      </td>
-    </tr>"""
+        # Make images responsive
+        safe = re.sub(
+            r'<img\b([^>]*?)>',
+            r'<img\1 style="max-width:100%;height:auto;display:block;margin:8px 0;border-radius:4px;">',
+            preamble_html,
+        )
+        preamble_block = (
+            f'<tr>'
+            f'<td bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};'
+            f'padding:24px 32px 0 32px;font-family:Arial,Helvetica,sans-serif;'
+            f'font-size:14px;line-height:1.7;color:{C["text_pri"]};">'
+            f'{safe}'
+            f'</td></tr>'
+        )
 
-    # ── Estate summary rows ──
+    # ── Estate summary ────────────────────────────────────────────────────────
     vuln      = int(e.get("vulnerable_devices", 0) or 0)
     total_dev = int(e.get("total_devices", 0) or 0)
-    vuln_pct  = f" ({round(100 * vuln / total_dev)} %)" if total_dev else ""
+    vuln_pct  = f" ({round(100 * vuln / total_dev)}%)" if total_dev else ""
     peak      = float(e.get("max_score") or 0.0)
 
     stat_rows = [
-        ("Clients Scanned",     f"{int(e.get('total_tenants', 0) or 0):,}"),
-        ("Total Devices",       f"{total_dev:,}"),
-        ("Vulnerable Devices",  f"{vuln:,}{vuln_pct}"),
-        ("Critical (&ge; 9.0)", f"{int(e.get('critical_devices', 0) or 0):,}"),
-        ("Total CVE Instances", f"{int(e.get('total_cve_instances', 0) or 0):,}"),
+        ("Clients Scanned",      f"{int(e.get('total_tenants', 0) or 0):,}"),
+        ("Total Devices",        f"{total_dev:,}"),
+        ("Vulnerable Devices",   f"{vuln:,}{vuln_pct}"),
+        ("Critical (&ge;&nbsp;9.0)", f"{int(e.get('critical_devices', 0) or 0):,}"),
+        ("Total CVE Instances",  f"{int(e.get('total_cve_instances', 0) or 0):,}"),
         ("Peak CVE Score",
-         f'<span style="background:{_score_color(peak)};color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;">'
-         f'{peak:.1f}</span>'),
+         f'<span style="background:{_score_color(peak)};color:#ffffff;'
+         f'padding:2px 10px;border-radius:4px;font-weight:bold;font-size:13px;">{peak:.1f}</span>'),
     ]
 
     estate_rows_html = ""
     for i, (label, value) in enumerate(stat_rows):
-        bg = "#f9fafb" if i % 2 == 0 else "#ffffff"
+        bg = C["bg_section"] if i % 2 == 0 else C["bg_card"]
+        cell_base = (
+            f'font-family:Arial,Helvetica,sans-serif;font-size:13px;'
+        )
         estate_rows_html += (
-            f'<tr style="background:{bg};">'
-            f'<td style="border:1px solid #e5e7eb;padding:9px 14px;font-family:Arial,Helvetica,sans-serif;'
-            f'font-size:13px;color:#6b7280;">{label}</td>'
-            f'<td style="border:1px solid #e5e7eb;padding:9px 14px;font-family:Arial,Helvetica,sans-serif;'
-            f'font-size:13px;color:#111827;font-weight:600;text-align:right;">{value}</td>'
+            f'<tr>'
+            f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
+            f'padding:10px 14px;{cell_base}color:{C["text_label"]};">{label}</td>'
+            f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
+            f'padding:10px 14px;{cell_base}color:{C["text_pri"]};font-weight:600;'
+            f'text-align:right;">{value}</td>'
             f'</tr>\n'
         )
 
     estate_padding = "24px 32px 0 32px" if leaderboard else "24px 32px"
 
-    # ── Leaderboard ──
+    # ── Leaderboard ───────────────────────────────────────────────────────────
     leaderboard_block = ""
     if leaderboard:
-        lb_rows_html = ""
+        lb_rows = ""
         for i, row in enumerate(leaderboard[:10]):
-            score     = float(row.get("max_score") or 0.0)
-            vuln_c    = int(row.get("vulnerable_devices", 0))
-            total_c   = int(row.get("total_devices", 0))
-            name      = str(row.get("name") or "—")
-            bg        = "#f9fafb" if i % 2 == 0 else "#ffffff"
-            sc_color  = _score_color(score)
-            lb_rows_html += (
-                f'<tr style="background:{bg};">'
-                f'<td style="border:1px solid #e5e7eb;padding:8px 12px;font-family:Arial,Helvetica,sans-serif;'
-                f'font-size:13px;color:#9ca3af;text-align:center;">{i + 1}</td>'
-                f'<td style="border:1px solid #e5e7eb;padding:8px 12px;font-family:Arial,Helvetica,sans-serif;'
-                f'font-size:13px;color:#111827;">{name}</td>'
-                f'<td style="border:1px solid #e5e7eb;padding:8px 12px;text-align:center;">'
-                f'<span style="background:{sc_color};color:#fff;padding:2px 10px;border-radius:4px;'
-                f'font-size:12px;font-weight:bold;font-family:Arial,Helvetica,sans-serif;">{score:.1f}</span></td>'
-                f'<td style="border:1px solid #e5e7eb;padding:8px 12px;font-family:Arial,Helvetica,sans-serif;'
-                f'font-size:13px;color:#6b7280;text-align:center;">{vuln_c:,}&nbsp;/&nbsp;{total_c:,}</td>'
+            score   = float(row.get("max_score") or 0.0)
+            vuln_c  = int(row.get("vulnerable_devices", 0))
+            total_c = int(row.get("total_devices", 0))
+            name    = str(row.get("name") or "—")
+            bg      = C["bg_section"] if i % 2 == 0 else C["bg_card"]
+            sc_bg   = _score_color(score)
+            lb_rows += (
+                f'<tr>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
+                f'padding:9px 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;'
+                f'color:{C["text_sec"]};text-align:center;">{i + 1}</td>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
+                f'padding:9px 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;'
+                f'color:{C["text_pri"]};">{name}</td>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
+                f'padding:9px 12px;text-align:center;">'
+                f'<span style="background:{sc_bg};color:#ffffff;padding:2px 10px;border-radius:4px;'
+                f'font-size:12px;font-weight:bold;font-family:Arial,Helvetica,sans-serif;">{score:.1f}</span>'
+                f'</td>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
+                f'padding:9px 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;'
+                f'color:{C["text_label"]};text-align:center;">{vuln_c:,}&nbsp;/&nbsp;{total_c:,}</td>'
                 f'</tr>\n'
             )
 
         top_n = min(10, len(leaderboard))
-        leaderboard_block = f"""
-    <tr>
-      <td style="padding:24px 32px 32px 32px;">
-        <h2 style="font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#111827;
-                   margin:0 0 12px 0;padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
-          Top {top_n} Clients by CVE Score
-        </h2>
-        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-          <thead>
-            <tr style="background:#111827;">
-              <th style="border:1px solid #374151;padding:8px 12px;font-family:Arial,Helvetica,sans-serif;
-                         font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;
-                         text-align:center;">#</th>
-              <th style="border:1px solid #374151;padding:8px 12px;font-family:Arial,Helvetica,sans-serif;
-                         font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;
-                         text-align:left;">Client</th>
-              <th style="border:1px solid #374151;padding:8px 12px;font-family:Arial,Helvetica,sans-serif;
-                         font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;
-                         text-align:center;">Peak Score</th>
-              <th style="border:1px solid #374151;padding:8px 12px;font-family:Arial,Helvetica,sans-serif;
-                         font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;
-                         text-align:center;">Vuln&nbsp;/&nbsp;Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lb_rows_html}
-          </tbody>
-        </table>
-      </td>
-    </tr>"""
+        th_style = (
+            f'border:1px solid {C["border"]};padding:8px 12px;'
+            f'font-family:Arial,Helvetica,sans-serif;font-size:10px;color:{C["text_sec"]};'
+            f'text-transform:uppercase;letter-spacing:0.08em;font-weight:600;'
+        )
+        leaderboard_block = (
+            f'<tr>'
+            f'<td bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};padding:24px 32px 32px 32px;">'
+            f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;'
+            f'color:{C["text_sec"]};text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;">'
+            f'Top {top_n} Clients by CVE Score</div>'
+            f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
+            f'<thead><tr bgcolor="#000000" style="background-color:#000000;">'
+            f'<th style="{th_style}text-align:center;">#</th>'
+            f'<th style="{th_style}text-align:left;">Client</th>'
+            f'<th style="{th_style}text-align:center;">Peak Score</th>'
+            f'<th style="{th_style}text-align:center;">Vuln&nbsp;/&nbsp;Total</th>'
+            f'</tr></thead>'
+            f'<tbody>{lb_rows}</tbody>'
+            f'</table>'
+            f'</td></tr>'
+        )
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>{subject}</title>
-</head>
-<body style="margin:0;padding:0;background-color:#f3f4f6;">
+    # ── Full HTML document ────────────────────────────────────────────────────
+    return "\n".join([
+        '<!DOCTYPE html>',
+        '<html lang="en">',
+        '<head>',
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">',
+        f'<title>{subject}</title>',
+        '</head>',
+        f'<body bgcolor="{C["bg_outer"]}" style="margin:0;padding:0;background-color:{C["bg_outer"]};">',
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0"',
+        f'       bgcolor="{C["bg_outer"]}" style="background-color:{C["bg_outer"]};">',
+        f'<tr><td align="center" style="padding:24px 16px;">',
+        f'<table width="640" cellpadding="0" cellspacing="0" border="0"',
+        f'       bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};max-width:640px;width:100%;">',
 
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f3f4f6;">
-<tr><td align="center" style="padding:24px 16px;">
+        # Header
+        f'<tr>',
+        f'<td bgcolor="#000000" style="background-color:#000000;padding:24px 32px;'
+        f'border-bottom:2px solid {C["divider"]};">',
+        f'<div style="font-family:monospace;font-size:22px;font-weight:bold;color:#ffffff;letter-spacing:3px;">'
+        f'DEFENSE HALO</div>',
+        f'<div style="font-family:monospace;font-size:10px;color:{C["accent"]};'
+        f'letter-spacing:4px;text-transform:uppercase;margin-top:4px;">Customer CVE Analyzer</div>',
+        f'<div style="margin-top:14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:{C["text_sec"]};">'
+        f'{subject}</div>',
+        f'</td></tr>',
 
-  <table width="640" cellpadding="0" cellspacing="0" border="0"
-         style="background-color:#ffffff;max-width:640px;width:100%;">
+        preamble_block,
 
-    <!-- Header -->
-    <tr>
-      <td style="background-color:#111827;padding:24px 32px;">
-        <div style="font-family:monospace;font-size:20px;font-weight:bold;color:#ffffff;letter-spacing:2px;">
-          DEFENSE HALO
-        </div>
-        <div style="font-family:monospace;font-size:10px;color:#34d399;letter-spacing:3px;
-                    text-transform:uppercase;margin-top:4px;">
-          Customer CVE Analyzer
-        </div>
-        <div style="margin-top:12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#d1d5db;">
-          {subject}
-        </div>
-      </td>
-    </tr>
+        # Estate summary
+        f'<tr>',
+        f'<td bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};padding:{estate_padding};">',
+        f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;'
+        f'color:{C["text_sec"]};text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;'
+        f'padding-bottom:8px;border-bottom:1px solid {C["border"]};">Estate Summary</div>',
+        f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">',
+        estate_rows_html,
+        f'</table></td></tr>',
 
-    {preamble_block}
+        leaderboard_block,
 
-    <!-- Estate Summary -->
-    <tr>
-      <td style="padding:{estate_padding};">
-        <h2 style="font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#111827;
-                   margin:0 0 12px 0;padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
-          Estate Summary
-        </h2>
-        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-          {estate_rows_html}
-        </table>
-      </td>
-    </tr>
+        # Footer
+        f'<tr>',
+        f'<td bgcolor="#000000" style="background-color:#000000;padding:14px 32px;'
+        f'border-top:1px solid {C["border"]};">',
+        f'<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:{C["text_label"]};">',
+        f'Report generated {now_str} &middot; Defense Halo Customer CVE Analyzer',
+        f'</p></td></tr>',
 
-    {leaderboard_block}
-
-    <!-- Footer -->
-    <tr>
-      <td style="background-color:#f9fafb;padding:16px 32px;border-top:1px solid #e5e7eb;">
-        <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#9ca3af;">
-          Report generated {now_str} &middot; Defense Halo Customer CVE Analyzer
-        </p>
-      </td>
-    </tr>
-
-  </table>
-
-</td></tr>
-</table>
-
-</body>
-</html>"""
+        f'</table>',
+        f'</td></tr></table>',
+        f'</body>',
+        f'</html>',
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +254,7 @@ def _build_html(estate_stats: dict, leaderboard: list, preamble_html: str, subje
 # ---------------------------------------------------------------------------
 
 def _build_plain(estate_stats: dict, leaderboard: list, preamble_html: str) -> str:
-    e = estate_stats
+    e     = estate_stats
     lines = []
 
     preamble_text = _html_to_text(preamble_html)
@@ -259,7 +281,7 @@ def _build_plain(estate_stats: dict, leaderboard: list, preamble_html: str) -> s
     if leaderboard:
         lines += ["TOP 10 CLIENTS BY CVE SCORE", "-" * 60]
         for i, row in enumerate(leaderboard[:10], 1):
-            score = float(row.get("max_score") or 0.0)
+            score   = float(row.get("max_score") or 0.0)
             vuln_c  = int(row.get("vulnerable_devices", 0))
             total_c = int(row.get("total_devices", 0))
             lines.append(
@@ -318,7 +340,7 @@ def send_report_email(
     html_body  = _build_html(estate_stats, leaderboard, preamble, subject)
     plain_body = _build_plain(estate_stats, leaderboard, preamble)
 
-    # ── Outer: mixed (carries the attachment) ──────────────────────────────
+    # Outer: mixed (carries the attachment)
     msg = MIMEMultipart("mixed")
     msg["From"]    = from_addr
     msg["To"]      = ", ".join(to_addrs)
@@ -326,13 +348,13 @@ def send_report_email(
     if cc_addrs:
         msg["Cc"] = ", ".join(cc_addrs)
 
-    # ── Inner: alternative (plain-text + HTML) ─────────────────────────────
+    # Inner: alternative (plain-text + HTML; email clients pick best version)
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(plain_body, "plain", "utf-8"))
     alt.attach(MIMEText(html_body,  "html",  "utf-8"))
     msg.attach(alt)
 
-    # ── Excel attachment ───────────────────────────────────────────────────
+    # Excel attachment
     fname = f"cve_report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
     attachment = MIMEApplication(
         xlsx_bytes,
@@ -342,7 +364,7 @@ def send_report_email(
     attachment["Content-Disposition"] = f'attachment; filename="{fname}"'
     msg.attach(attachment)
 
-    # ── SMTP delivery ──────────────────────────────────────────────────────
+    # SMTP delivery
     ctx = ssl.create_default_context()
 
     if tls_mode == "tls":

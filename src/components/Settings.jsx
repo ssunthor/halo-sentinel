@@ -5,6 +5,7 @@ import {
   Mail, Clock, Server,
 } from 'lucide-react';
 import TagInput from './TagInput';
+import RichEditor from './RichEditor';
 
 const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
 
@@ -283,14 +284,12 @@ const NotificationForm = ({ initial, onSave, onBack }) => {
           </Field>
           <Field
             label="Body Preamble"
-            hint="This text appears at the top of the email. Estate stats and top-10 client rankings are appended automatically."
+            hint="This rich-text section appears at the top of the email. The estate summary and top-10 client ranking tables are appended automatically below it."
           >
-            <textarea
+            <RichEditor
               value={cfg.body_preamble}
-              onChange={e => set('body_preamble', e.target.value)}
-              rows={5}
+              onChange={v => set('body_preamble', v)}
               placeholder="Enter introductory message…"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition-colors resize-y"
             />
           </Field>
         </div>

@@ -55,50 +55,73 @@ def _render_subject(template: str, estate_stats: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# HTML email builder  (dashboard dark palette)
+# HTML email — dashboard dark palette
+#
+# Matches the UI exactly:
+#   bg-black (#000000) body, gray-900 (#111827) panels,
+#   gray-800 (#1f2937) alternating rows, gray-700 (#374151) borders,
+#   green-500 (#22c55e) accent, emerald-400 (#34d399) subheading,
+#   monospace font for all data / section labels.
 # ---------------------------------------------------------------------------
 
-# Color tokens matching the dashboard (gray-950/900/800, green-400/500)
-_C = dict(
-    bg_outer   = "#030712",   # near-black wrapper
-    bg_card    = "#111827",   # gray-900
-    bg_section = "#1f2937",   # gray-800 alternate row
-    border     = "#374151",   # gray-700
-    text_pri   = "#f9fafb",   # white
-    text_sec   = "#9ca3af",   # gray-400
-    text_label = "#6b7280",   # gray-500
-    accent     = "#34d399",   # emerald-400
-    divider    = "#22c55e",   # green-500
-)
+# Shared font stacks
+_MONO  = "'Courier New', Courier, monospace"
+_SANS  = "Arial, Helvetica, sans-serif"
+
+# Color palette (mirrors Tailwind classes used by the dashboard)
+_BG        = "#000000"   # body / outer wrapper  (bg-black)
+_PANEL     = "#111827"   # panel background      (bg-gray-900)
+_ROW_ALT   = "#1f2937"   # alternate row         (bg-gray-800)
+_BORDER    = "#374151"   # table / divider       (border-gray-700)
+_BORDER_DIM= "#1f2937"   # subtle border         (border-gray-800)
+_GREEN     = "#22c55e"   # primary accent        (text-green-500)
+_EMERALD   = "#34d399"   # secondary accent      (text-emerald-400)
+_WHITE     = "#ffffff"
+_GRAY_100  = "#f3f4f6"   # primary text
+_GRAY_400  = "#9ca3af"   # secondary text
+_GRAY_500  = "#6b7280"   # labels / dim text
+_GRAY_600  = "#4b5563"   # footer / muted
 
 
-def _td(bg, border, padding, style_extra, content):
+def _cell(bg, extra_style, content):
     """Emit a <td> with both bgcolor attr and inline background-color."""
     return (
-        f'<td bgcolor="{bg}" style="background-color:{bg};border:{border};'
-        f'padding:{padding};{style_extra}">{content}</td>'
+        f'<td bgcolor="{bg}" style="background-color:{bg};{extra_style}">'
+        f'{content}</td>'
+    )
+
+
+def _label_row(text: str) -> str:
+    """Section separator that looks like the dashboard's uppercase tracking labels."""
+    return (
+        f'<tr>'
+        f'<td colspan="4" bgcolor="{_BG}" style="background-color:{_BG};'
+        f'padding:20px 24px 8px 24px;'
+        f'font-family:{_MONO};font-size:10px;font-weight:bold;color:{_GRAY_500};'
+        f'text-transform:uppercase;letter-spacing:3px;'
+        f'border-bottom:1px solid {_BORDER_DIM};">'
+        f'{text}'
+        f'</td></tr>'
     )
 
 
 def _build_html(estate_stats: dict, leaderboard: list, preamble_html: str, subject: str) -> str:
-    C       = _C
     e       = estate_stats
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     # ── Preamble ─────────────────────────────────────────────────────────────
     preamble_block = ""
     if not _is_empty_html(preamble_html):
-        # Make images responsive
         safe = re.sub(
             r'<img\b([^>]*?)>',
-            r'<img\1 style="max-width:100%;height:auto;display:block;margin:8px 0;border-radius:4px;">',
+            r'<img\1 style="max-width:100%;height:auto;display:block;margin:10px 0;border-radius:4px;">',
             preamble_html,
         )
         preamble_block = (
             f'<tr>'
-            f'<td bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};'
-            f'padding:24px 32px 0 32px;font-family:Arial,Helvetica,sans-serif;'
-            f'font-size:14px;line-height:1.7;color:{C["text_pri"]};">'
+            f'<td bgcolor="{_PANEL}" style="background-color:{_PANEL};'
+            f'padding:20px 24px;border-bottom:1px solid {_BORDER_DIM};'
+            f'font-family:{_SANS};font-size:14px;line-height:1.7;color:{_GRAY_100};">'
             f'{safe}'
             f'</td></tr>'
         )
@@ -109,90 +132,85 @@ def _build_html(estate_stats: dict, leaderboard: list, preamble_html: str, subje
     vuln_pct  = f" ({round(100 * vuln / total_dev)}%)" if total_dev else ""
     peak      = float(e.get("max_score") or 0.0)
 
-    stat_rows = [
-        ("Clients Scanned",      f"{int(e.get('total_tenants', 0) or 0):,}"),
-        ("Total Devices",        f"{total_dev:,}"),
-        ("Vulnerable Devices",   f"{vuln:,}{vuln_pct}"),
-        ("Critical (&ge;&nbsp;9.0)", f"{int(e.get('critical_devices', 0) or 0):,}"),
-        ("Total CVE Instances",  f"{int(e.get('total_cve_instances', 0) or 0):,}"),
+    stat_rows_data = [
+        ("Clients Scanned",       f"{int(e.get('total_tenants', 0) or 0):,}"),
+        ("Total Devices",         f"{total_dev:,}"),
+        ("Vulnerable Devices",    f"{vuln:,}{vuln_pct}"),
+        ("Critical (&ge; 9.0)",   f"{int(e.get('critical_devices', 0) or 0):,}"),
+        ("Total CVE Instances",   f"{int(e.get('total_cve_instances', 0) or 0):,}"),
         ("Peak CVE Score",
-         f'<span style="background:{_score_color(peak)};color:#ffffff;'
-         f'padding:2px 10px;border-radius:4px;font-weight:bold;font-size:13px;">{peak:.1f}</span>'),
+         f'<span style="display:inline-block;background:{_score_color(peak)};color:{_WHITE};'
+         f'padding:1px 10px;border-radius:3px;font-family:{_MONO};font-weight:bold;font-size:13px;">'
+         f'{peak:.1f}</span>'),
     ]
 
-    estate_rows_html = ""
-    for i, (label, value) in enumerate(stat_rows):
-        bg = C["bg_section"] if i % 2 == 0 else C["bg_card"]
-        cell_base = (
-            f'font-family:Arial,Helvetica,sans-serif;font-size:13px;'
-        )
-        estate_rows_html += (
+    estate_rows = ""
+    for i, (label, value) in enumerate(stat_rows_data):
+        bg = _ROW_ALT if i % 2 == 0 else _PANEL
+        estate_rows += (
             f'<tr>'
-            f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
-            f'padding:10px 14px;{cell_base}color:{C["text_label"]};">{label}</td>'
-            f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
-            f'padding:10px 14px;{cell_base}color:{C["text_pri"]};font-weight:600;'
-            f'text-align:right;">{value}</td>'
+            f'<td bgcolor="{bg}" style="background-color:{bg};'
+            f'border:1px solid {_BORDER};padding:9px 14px;'
+            f'font-family:{_MONO};font-size:12px;color:{_GRAY_500};">{label}</td>'
+            f'<td bgcolor="{bg}" style="background-color:{bg};'
+            f'border:1px solid {_BORDER};padding:9px 14px;'
+            f'font-family:{_MONO};font-size:12px;color:{_GRAY_100};'
+            f'font-weight:bold;text-align:right;">{value}</td>'
             f'</tr>\n'
         )
-
-    estate_padding = "24px 32px 0 32px" if leaderboard else "24px 32px"
 
     # ── Leaderboard ───────────────────────────────────────────────────────────
     leaderboard_block = ""
     if leaderboard:
+        th_style = (
+            f'border:1px solid {_BORDER};padding:8px 14px;'
+            f'font-family:{_MONO};font-size:10px;color:{_GRAY_500};'
+            f'text-transform:uppercase;letter-spacing:2px;font-weight:bold;'
+        )
         lb_rows = ""
         for i, row in enumerate(leaderboard[:10]):
             score   = float(row.get("max_score") or 0.0)
             vuln_c  = int(row.get("vulnerable_devices", 0))
             total_c = int(row.get("total_devices", 0))
             name    = str(row.get("name") or "—")
-            bg      = C["bg_section"] if i % 2 == 0 else C["bg_card"]
+            bg      = _ROW_ALT if i % 2 == 0 else _PANEL
             sc_bg   = _score_color(score)
             lb_rows += (
                 f'<tr>'
-                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
-                f'padding:9px 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;'
-                f'color:{C["text_sec"]};text-align:center;">{i + 1}</td>'
-                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
-                f'padding:9px 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;'
-                f'color:{C["text_pri"]};">{name}</td>'
-                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
-                f'padding:9px 12px;text-align:center;">'
-                f'<span style="background:{sc_bg};color:#ffffff;padding:2px 10px;border-radius:4px;'
-                f'font-size:12px;font-weight:bold;font-family:Arial,Helvetica,sans-serif;">{score:.1f}</span>'
-                f'</td>'
-                f'<td bgcolor="{bg}" style="background-color:{bg};border:1px solid {C["border"]};'
-                f'padding:9px 12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;'
-                f'color:{C["text_label"]};text-align:center;">{vuln_c:,}&nbsp;/&nbsp;{total_c:,}</td>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};'
+                f'border:1px solid {_BORDER};padding:8px 14px;'
+                f'font-family:{_MONO};font-size:12px;color:{_GRAY_500};'
+                f'text-align:center;">{i + 1}</td>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};'
+                f'border:1px solid {_BORDER};padding:8px 14px;'
+                f'font-family:{_MONO};font-size:12px;color:{_GRAY_100};">{name}</td>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};'
+                f'border:1px solid {_BORDER};padding:8px 14px;text-align:center;">'
+                f'<span style="display:inline-block;background:{sc_bg};color:{_WHITE};'
+                f'padding:1px 10px;border-radius:3px;font-family:{_MONO};'
+                f'font-size:12px;font-weight:bold;">{score:.1f}</span></td>'
+                f'<td bgcolor="{bg}" style="background-color:{bg};'
+                f'border:1px solid {_BORDER};padding:8px 14px;'
+                f'font-family:{_MONO};font-size:12px;color:{_GRAY_500};'
+                f'text-align:center;">{vuln_c:,}&nbsp;/&nbsp;{total_c:,}</td>'
                 f'</tr>\n'
             )
 
         top_n = min(10, len(leaderboard))
-        th_style = (
-            f'border:1px solid {C["border"]};padding:8px 12px;'
-            f'font-family:Arial,Helvetica,sans-serif;font-size:10px;color:{C["text_sec"]};'
-            f'text-transform:uppercase;letter-spacing:0.08em;font-weight:600;'
-        )
         leaderboard_block = (
-            f'<tr>'
-            f'<td bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};padding:24px 32px 32px 32px;">'
-            f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;'
-            f'color:{C["text_sec"]};text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;">'
-            f'Top {top_n} Clients by CVE Score</div>'
+            _label_row(f"Top {top_n} Clients by CVE Score") +
+            f'<tr><td bgcolor="{_BG}" style="background-color:{_BG};padding:0 24px 24px 24px;">'
             f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
-            f'<thead><tr bgcolor="#000000" style="background-color:#000000;">'
+            f'<thead><tr bgcolor="{_BG}" style="background-color:{_BG};">'
             f'<th style="{th_style}text-align:center;">#</th>'
             f'<th style="{th_style}text-align:left;">Client</th>'
             f'<th style="{th_style}text-align:center;">Peak Score</th>'
-            f'<th style="{th_style}text-align:center;">Vuln&nbsp;/&nbsp;Total</th>'
+            f'<th style="{th_style}text-align:center;">Vuln / Total</th>'
             f'</tr></thead>'
             f'<tbody>{lb_rows}</tbody>'
-            f'</table>'
-            f'</td></tr>'
+            f'</table></td></tr>'
         )
 
-    # ── Full HTML document ────────────────────────────────────────────────────
     return "\n".join([
         '<!DOCTYPE html>',
         '<html lang="en">',
@@ -201,44 +219,50 @@ def _build_html(estate_stats: dict, leaderboard: list, preamble_html: str, subje
         '<meta name="viewport" content="width=device-width,initial-scale=1.0">',
         f'<title>{subject}</title>',
         '</head>',
-        f'<body bgcolor="{C["bg_outer"]}" style="margin:0;padding:0;background-color:{C["bg_outer"]};">',
-        f'<table width="100%" cellpadding="0" cellspacing="0" border="0"',
-        f'       bgcolor="{C["bg_outer"]}" style="background-color:{C["bg_outer"]};">',
-        f'<tr><td align="center" style="padding:24px 16px;">',
-        f'<table width="640" cellpadding="0" cellspacing="0" border="0"',
-        f'       bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};max-width:640px;width:100%;">',
+        f'<body bgcolor="{_BG}" style="margin:0;padding:0;background-color:{_BG};">',
 
-        # Header
+        # ── Outer wrapper ──
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0"',
+        f'       bgcolor="{_BG}" style="background-color:{_BG};">',
+        f'<tr><td align="center" style="padding:24px 16px;">',
+
+        # ── Card ──
+        f'<table width="640" cellpadding="0" cellspacing="0" border="0"',
+        f'       bgcolor="{_BG}" style="background-color:{_BG};max-width:640px;width:100%;'
+        f'border:1px solid {_BORDER_DIM};">',
+
+        # ── Header ── matches the nav bar exactly
         f'<tr>',
-        f'<td bgcolor="#000000" style="background-color:#000000;padding:24px 32px;'
-        f'border-bottom:2px solid {C["divider"]};">',
-        f'<div style="font-family:monospace;font-size:22px;font-weight:bold;color:#ffffff;letter-spacing:3px;">'
-        f'DEFENSE HALO</div>',
-        f'<div style="font-family:monospace;font-size:10px;color:{C["accent"]};'
-        f'letter-spacing:4px;text-transform:uppercase;margin-top:4px;">Customer CVE Analyzer</div>',
-        f'<div style="margin-top:14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:{C["text_sec"]};">'
+        f'<td bgcolor="{_BG}" style="background-color:{_BG};padding:24px 24px 20px 24px;'
+        f'border-bottom:2px solid {_GREEN};">',
+        f'<div style="font-family:{_MONO};font-size:22px;font-weight:bold;'
+        f'color:{_WHITE};letter-spacing:4px;">DEFENSE HALO</div>',
+        f'<div style="font-family:{_MONO};font-size:10px;color:{_EMERALD};'
+        f'letter-spacing:5px;text-transform:uppercase;margin-top:3px;">Customer CVE Analyzer</div>',
+        f'<div style="margin-top:14px;font-family:{_MONO};font-size:12px;color:{_GRAY_400};">'
         f'{subject}</div>',
         f'</td></tr>',
 
+        # ── Preamble (if any) ──
         preamble_block,
 
-        # Estate summary
-        f'<tr>',
-        f'<td bgcolor="{C["bg_card"]}" style="background-color:{C["bg_card"]};padding:{estate_padding};">',
-        f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;'
-        f'color:{C["text_sec"]};text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;'
-        f'padding-bottom:8px;border-bottom:1px solid {C["border"]};">Estate Summary</div>',
+        # ── Estate summary section label ──
+        _label_row("Estate Summary"),
+
+        # ── Estate summary table ──
+        f'<tr><td bgcolor="{_BG}" style="background-color:{_BG};padding:0 24px 24px 24px;">',
         f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">',
-        estate_rows_html,
+        estate_rows,
         f'</table></td></tr>',
 
+        # ── Leaderboard ──
         leaderboard_block,
 
-        # Footer
+        # ── Footer ──
         f'<tr>',
-        f'<td bgcolor="#000000" style="background-color:#000000;padding:14px 32px;'
-        f'border-top:1px solid {C["border"]};">',
-        f'<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:{C["text_label"]};">',
+        f'<td bgcolor="{_BG}" style="background-color:{_BG};padding:14px 24px;'
+        f'border-top:1px solid {_BORDER_DIM};">',
+        f'<p style="margin:0;font-family:{_MONO};font-size:10px;color:{_GRAY_600};">',
         f'Report generated {now_str} &middot; Defense Halo Customer CVE Analyzer',
         f'</p></td></tr>',
 
@@ -348,7 +372,7 @@ def send_report_email(
     if cc_addrs:
         msg["Cc"] = ", ".join(cc_addrs)
 
-    # Inner: alternative (plain-text + HTML; email clients pick best version)
+    # Inner: alternative (plain-text + HTML; clients pick best)
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(plain_body, "plain", "utf-8"))
     alt.attach(MIMEText(html_body,  "html",  "utf-8"))

@@ -1582,15 +1582,21 @@ async def get_scan_trends_endpoint():
     return await loop.run_in_executor(thread_pool, db.get_scan_trends)
 
 
-def _build_excel(rows: list) -> bytes:
-    from io import BytesIO
-    import openpyxl
+@app.get("/api/config/vendors")
+async def get_vendors_endpoint(tenant_ids: str = ""):
+    """Return distinct platform/vendor names, optionally filtered to specific tenants.
+
+    tenant_ids: comma-separated list of tenant_id values; empty string = all tenants.
+    Used by the notification form to dynamically populate the vendor filter list.
+    """
+    tids = [t.strip() for t in tenant_ids.split(",") if t.strip()] if tenant_ids else []
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(thread_pool, db.get_vendors_for_tenants, tids)
+
+
+def _write_cve_data_sheet(ws, rows: list):
+    """Populate the CVE Data worksheet."""
     from openpyxl.styles import Font, PatternFill, Alignment
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "CVE Export"
-
     headers = [
         "Client Name", "Device Name", "PON", "Platform", "Device Type",
         "Current Firmware", "Recommended Firmware", "Serial Number",
@@ -1604,7 +1610,6 @@ def _build_excel(rows: list) -> bytes:
         cell.fill = hdr_fill
         cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 20
-
     for i, row in enumerate(rows, 2):
         ws.cell(row=i, column=1, value=_xlsx_str(row.get("tenant_name")))
         ws.cell(row=i, column=2, value=_xlsx_str(row.get("resource_name")))
@@ -1612,7 +1617,7 @@ def _build_excel(rows: list) -> bytes:
         ws.cell(row=i, column=4, value=_xlsx_str(row.get("platform_name")))
         ws.cell(row=i, column=5, value=_xlsx_str(row.get("device_type")))
         ws.cell(row=i, column=6, value=_xlsx_str(row.get("current_firmware")))
-        ws.cell(row=i, column=7, value="")
+        ws.cell(row=i, column=7, value=_xlsx_str(row.get("recommended_version")))
         ws.cell(row=i, column=8, value=_xlsx_str(row.get("serial")))
         score = round(row.get("cve_score") or 0.0, 1)
         sc = ws.cell(row=i, column=9, value=score)
@@ -1625,10 +1630,121 @@ def _build_excel(rows: list) -> bytes:
             sc.font = Font(color="FFFFFF")
         elif score >= 4.0:
             sc.fill = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")
-
     for col, width in enumerate([20, 30, 15, 20, 25, 20, 22, 20, 18, 22], 1):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
     ws.freeze_panes = "A2"
+
+
+def _write_dashboard_sheet(ws, stats: dict, leaderboard: list):
+    """Populate the Dashboard worksheet with estate stats and top-10 leaderboard."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    NAVY = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+    SECT = PatternFill(start_color="2D2D2D", end_color="2D2D2D", fill_type="solid")
+    ALT  = PatternFill(start_color="1C1C1C", end_color="1C1C1C", fill_type="solid")
+
+    def hdr(row, col, val, fill=NAVY, sz=13, bold=True, span=10, color="FFFFFF"):
+        c = ws.cell(row=row, column=col, value=val)
+        c.font = Font(color=color, bold=bold, size=sz)
+        c.fill = fill
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
+        if span > 1:
+            ws.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col + span - 1)
+        ws.row_dimensions[row].height = 22 if sz >= 13 else 18
+        return c
+
+    def kv(row, key, val, val_color="FFFFFF", bold_val=False):
+        lc = ws.cell(row=row, column=1, value=key)
+        lc.font = Font(color="9CA3AF", size=10)
+        lc.alignment = Alignment(horizontal="left", vertical="center")
+        vc = ws.cell(row=row, column=2, value=val)
+        vc.font = Font(color=val_color, bold=bold_val, size=11)
+        vc.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[row].height = 16
+
+    # ── Title ─────────────────────────────────────────────────────────
+    hdr(1, 1, "DEFENSE HALO — Estate Security Summary", sz=14)
+    kv(2, "Generated", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+    ws.row_dimensions[3].height = 8  # spacer
+
+    # ── Estate Stats ──────────────────────────────────────────────────
+    hdr(4, 1, "ESTATE SUMMARY", fill=SECT, sz=10, color="6EE7B7")
+    row = 5
+    kv(row,     "Total Clients",       stats.get("total_tenants", 0)); row += 1
+    kv(row,     "Total Devices",       stats.get("total_devices", 0)); row += 1
+    kv(row,     "  Physical Devices",  stats.get("physical_devices", 0)); row += 1
+    kv(row,     "  Virtual Machines",  stats.get("virtual_machines", 0)); row += 1
+    vuln = stats.get("vulnerable_devices", 0)
+    total = stats.get("total_devices", 1) or 1
+    kv(row, "Vulnerable Devices", f"{vuln:,}  ({round(100*vuln/total)}% of estate)", val_color="FB923C"); row += 1
+    crit = stats.get("critical_devices", 0)
+    kv(row, "Critical Devices",   crit, val_color="EF4444" if crit else "4ADE80", bold_val=crit > 0); row += 1
+    kv(row, "Total CVE Instances", f"{stats.get('total_cve_instances', 0):,}", val_color="FBBF24"); row += 1
+    peak = stats.get("max_score") or 0.0
+    peak_color = "EF4444" if peak >= 9 else "FB923C" if peak >= 7 else "FBBF24" if peak >= 4 else "4ADE80"
+    kv(row, "Peak CVE Score", f"{peak:.1f}", val_color=peak_color, bold_val=True); row += 1
+    ws.row_dimensions[row].height = 8  # spacer; row += 1
+
+    # ── Leaderboard top 10 ────────────────────────────────────────────
+    hdr(row + 1, 1, "TOP 10 CLIENTS BY RISK", fill=SECT, sz=10, color="6EE7B7")
+    row += 2
+    lb_headers = ["#", "Client", "Devices", "Vulnerable", "Vuln %", "CVE Score", "Risk Posture", "Trend", "Last Scan"]
+    for col, h in enumerate(lb_headers, 1):
+        c = ws.cell(row=row, column=col, value=h)
+        c.font = Font(color="FFFFFF", bold=True, size=10)
+        c.fill = NAVY
+        c.alignment = Alignment(horizontal="center" if col != 2 else "left", vertical="center")
+    ws.row_dimensions[row].height = 18
+    row += 1
+
+    for rank, lb in enumerate(leaderboard[:10], 1):
+        score = lb.get("max_score") or 0.0
+        srow = ws.cell(row=row, column=1, value=rank)
+        srow.alignment = Alignment(horizontal="center")
+        ws.cell(row=row, column=2, value=_xlsx_str(lb.get("name", "")))
+        ws.cell(row=row, column=3, value=lb.get("total_devices", 0)).alignment = Alignment(horizontal="center")
+        ws.cell(row=row, column=4, value=lb.get("vulnerable_devices", 0)).alignment = Alignment(horizontal="center")
+        ws.cell(row=row, column=5, value=f"{lb.get('vuln_pct') or 0:.0f}%").alignment = Alignment(horizontal="center")
+        sc = ws.cell(row=row, column=6, value=round(score, 1))
+        sc.font = Font(bold=True, color="EF4444" if score >= 9 else "FB923C" if score >= 7 else "FBBF24" if score >= 4 else "4ADE80")
+        sc.alignment = Alignment(horizontal="center")
+        ws.cell(row=row, column=7, value=_xlsx_str(lb.get("risk_posture", "—"))).alignment = Alignment(horizontal="center")
+        ws.cell(row=row, column=8, value=_xlsx_str(lb.get("trend", "—"))).alignment = Alignment(horizontal="center")
+        age = lb.get("scanned_at", "")
+        if age:
+            try:
+                h_ = (datetime.now(timezone.utc).replace(tzinfo=None) - datetime.fromisoformat(age).replace(tzinfo=None)).total_seconds() / 3600
+                age = f"{round(h_)}h ago" if h_ < 24 else f"{round(h_/24)}d ago"
+            except Exception:
+                age = "—"
+        ws.cell(row=row, column=9, value=age).alignment = Alignment(horizontal="center")
+        row_fill = ALT if rank % 2 == 0 else PatternFill(start_color="111111", end_color="111111", fill_type="solid")
+        for col in range(1, 10):
+            ws.cell(row=row, column=col).fill = row_fill
+        ws.row_dimensions[row].height = 16
+        row += 1
+
+    # ── Column widths ─────────────────────────────────────────────────
+    for col, width in enumerate([5, 28, 10, 12, 8, 11, 14, 10, 14], 1):
+        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+
+
+def _build_excel(rows: list, stats: dict | None = None, leaderboard: list | None = None) -> bytes:
+    from io import BytesIO
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    first_ws = wb.active
+    assert first_ws is not None  # openpyxl always creates an initial sheet
+
+    if stats is not None and leaderboard is not None:
+        first_ws.title = "Dashboard"
+        _write_dashboard_sheet(first_ws, stats, leaderboard)
+        ws_data = wb.create_sheet("CVE Data")
+    else:
+        first_ws.title = "CVE Data"
+        ws_data = first_ws
+
+    _write_cve_data_sheet(ws_data, rows)
 
     buf = BytesIO()
     wb.save(buf)
@@ -1637,11 +1753,15 @@ def _build_excel(rows: list) -> bytes:
 
 @app.get("/api/export/all")
 async def export_all_tenants():
-    """Download an Excel file of all devices across every scanned tenant."""
+    """Download an Excel file of all devices across every scanned tenant (2-sheet: Dashboard + CVE Data)."""
     loop = asyncio.get_running_loop()
-    rows = await loop.run_in_executor(thread_pool, db.get_export_rows, None)
-    xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows)
-    fname = f"cve_export_all_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    rows, stats, leaderboard = await asyncio.gather(
+        loop.run_in_executor(thread_pool, db.get_export_rows, None),
+        loop.run_in_executor(thread_pool, db.get_estate_stats),
+        loop.run_in_executor(thread_pool, db.get_leaderboard, 10, 0),
+    )
+    xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows, stats, leaderboard)
+    fname = f"cve_export_all_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
     return Response(
         content=xlsx,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1651,14 +1771,14 @@ async def export_all_tenants():
 
 @app.get("/api/export/tenant/{tenant_id}")
 async def export_tenant(tenant_id: str):
-    """Download an Excel file of devices for a single tenant."""
+    """Download an Excel file of devices for a single tenant (CVE Data only)."""
     loop = asyncio.get_running_loop()
     rows = await loop.run_in_executor(thread_pool, db.get_export_rows, str(tenant_id))
     if not rows:
         raise HTTPException(status_code=404, detail="No data found for this tenant.")
     xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows)
     safe = re.sub(r'[^\w\-]', '_', rows[0].get("tenant_name", tenant_id))
-    fname = f"cve_export_{safe}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    fname = f"cve_export_{safe}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
     return Response(
         content=xlsx,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1726,6 +1846,30 @@ async def delete_notification(notification_id: str):
     return {"ok": True}
 
 
+async def _build_notification_payload(cfg: dict, loop) -> tuple:
+    """Build (xlsx, stats, leaderboard) for a notification, respecting its filters."""
+    filter_tenant_ids = cfg.get("filter_tenant_ids") or []
+    filter_platforms  = cfg.get("filter_platforms") or []
+
+    def get_rows():
+        return db.get_export_rows(
+            tenant_ids=filter_tenant_ids or None,
+            platforms=filter_platforms or None,
+        )
+
+    rows        = await loop.run_in_executor(thread_pool, get_rows)
+    stats       = await loop.run_in_executor(thread_pool, db.get_estate_stats)
+    leaderboard = await loop.run_in_executor(thread_pool, db.get_leaderboard, 20, 0)
+
+    # Filter leaderboard to selected tenants only (platforms don't affect tenant ranking)
+    if filter_tenant_ids:
+        tid_set = set(filter_tenant_ids)
+        leaderboard = [r for r in leaderboard if r["tenant_id"] in tid_set]
+
+    xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows, stats, leaderboard)
+    return xlsx, stats, leaderboard
+
+
 @app.post("/api/config/notifications/{notification_id}/test")
 async def test_notification(notification_id: str):
     """Send a test email immediately using this notification's config."""
@@ -1734,10 +1878,7 @@ async def test_notification(notification_id: str):
     if cfg is None:
         raise HTTPException(status_code=404, detail="Notification not found")
     try:
-        rows         = await loop.run_in_executor(thread_pool, db.get_export_rows, None)
-        xlsx         = await loop.run_in_executor(thread_pool, _build_excel, rows)
-        stats        = await loop.run_in_executor(thread_pool, db.get_estate_stats)
-        leaderboard  = await loop.run_in_executor(thread_pool, db.get_leaderboard, 20, 0)
+        xlsx, stats, leaderboard = await _build_notification_payload(cfg, loop)
         await loop.run_in_executor(
             thread_pool, email_report.send_report_email, cfg, xlsx, stats, leaderboard
         )
@@ -1809,10 +1950,7 @@ async def notification_scheduler():
                 name = cfg.get("name", nid)
                 print(f"📧 Sending scheduled notification: {name}")
                 try:
-                    rows        = await loop.run_in_executor(thread_pool, db.get_export_rows, None)
-                    xlsx        = await loop.run_in_executor(thread_pool, _build_excel, rows)
-                    stats       = await loop.run_in_executor(thread_pool, db.get_estate_stats)
-                    leaderboard = await loop.run_in_executor(thread_pool, db.get_leaderboard, 20, 0)
+                    xlsx, stats, leaderboard = await _build_notification_payload(cfg, loop)
                     await loop.run_in_executor(
                         thread_pool, email_report.send_report_email, cfg, xlsx, stats, leaderboard
                     )

@@ -559,17 +559,55 @@ def update_device_llm_analysis(tenant_id: str, resource_name: str, llm_analysis:
 # Export data
 # ---------------------------------------------------------------------------
 
-def get_export_rows(tenant_id: str | None = None) -> list[dict]:
+def get_vendors_for_tenants(tenant_ids: list) -> list:
+    """Return distinct non-empty platform_name values for the given tenants, or all if empty."""
+    conn = _connect()
+    if tenant_ids:
+        placeholders = ','.join('?' * len(tenant_ids))
+        rows = conn.execute(f"""
+            SELECT DISTINCT platform_name FROM devices
+            WHERE tenant_id IN ({placeholders})
+              AND platform_name IS NOT NULL AND platform_name != ''
+            ORDER BY platform_name
+        """, list(tenant_ids)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT DISTINCT platform_name FROM devices
+            WHERE platform_name IS NOT NULL AND platform_name != ''
+            ORDER BY platform_name
+        """).fetchall()
+    return [r[0] for r in rows]
+
+
+def get_export_rows(
+    tenant_id: str | None = None,
+    tenant_ids: list | None = None,
+    platforms: list | None = None,
+) -> list[dict]:
     """
     Return one row per device suitable for Excel export.
-    Pass tenant_id to limit to a single tenant, or None for all.
+    - tenant_id: single-tenant export (per-tenant download)
+    - tenant_ids: filter to a list of tenants (notification filters)
+    - platforms: filter to specific platform_names (notification filters)
+    Pass all None/empty for the full estate.
     """
+    conditions = ["d.highest_severity_score > 0"]
+    params: list = []
+
     if tenant_id:
-        where = "WHERE d.tenant_id = ? AND d.highest_severity_score > 0"
-        params = (tenant_id,)
-    else:
-        where = "WHERE d.highest_severity_score > 0"
-        params = ()
+        conditions.append("d.tenant_id = ?")
+        params.append(tenant_id)
+    elif tenant_ids:
+        placeholders = ','.join('?' * len(tenant_ids))
+        conditions.append(f"d.tenant_id IN ({placeholders})")
+        params.extend(tenant_ids)
+
+    if platforms:
+        placeholders = ','.join('?' * len(platforms))
+        conditions.append(f"d.platform_name IN ({placeholders})")
+        params.extend(platforms)
+
+    where = "WHERE " + " AND ".join(conditions)
     rows = _connect().execute(f"""
         SELECT
             t.name                      AS tenant_name,
@@ -724,6 +762,8 @@ DEFAULT_NOTIFICATION_CONFIG = {
     "schedule_day_of_week": 1,        # 1=Mon … 7=Sun (weekly only)
     "schedule_day_of_month": 1,       # 1-31 (monthly only)
     "last_sent_at": None,
+    "filter_tenant_ids": [],          # [] = all tenants
+    "filter_platforms": [],           # [] = all platforms
 }
 
 

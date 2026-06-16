@@ -8,6 +8,8 @@
       {
         "category": "✨ Features",
         "items": [
+          "Notification report filters: each notification now supports a Customer Filter (multi-select from all scanned tenants) and a Platform / Vendor Filter (dynamically populated based on selected customers) — leaving both empty reports the full estate; filter summary badge shown on notification cards; exported XLS and email body both respect the active filters",
+          "Two-sheet XLS export: 'Export All' download now produces a two-tab workbook — Dashboard sheet (estate summary stats + top-10 client leaderboard with color-coded CVE severity) and CVE Data sheet (full per-device CVE rows); per-tenant exports retain the single-sheet format",
           "Scan trend tracking: every completed global scan is recorded in a new scan_history table; estate stat cards show delta badges (▲/▼ with color-coded good/bad direction) compared to the previous scan; new Scan Comparison panel shows current vs previous values for inventory (total, physical, VMs), exposure (vulnerable, critical, high, CVEs, peak score), and NVD query efficiency (cache hits, API calls, duration); collapsible Scan History table at the bottom shows all recorded scans in chronological order",
           "Physical / VM breakdown: estate stats Total Devices card now includes a physical · VMs sub-line; Scan Comparison and Scan History panels both break out physical device and virtual machine counts independently",
           "User Guide: full in-app documentation browser accessible from a 'User Guide' button (book icon) in the navigation bar — sidebar section navigation, prev/next pagination, and export to TXT, Markdown, or PDF (print dialog); covers overview, navigation, leaderboard, scanning, tenant detail, CVE scoring, recommended versions, email notifications, settings, and export",
@@ -33,6 +35,10 @@
       {
         "category": "✨ Features",
         "items": [
+          "GET /api/config/vendors: returns distinct platform_name values in use across the estate, optionally filtered by tenant_ids query param — used by the frontend to populate the dynamic vendor/platform filter list in notification settings",
+          "get_export_rows() extended with tenant_ids and platforms filter params: notification scheduler and test-send both pass active filter lists so emailed attachments contain only the filtered subset; get_vendors_for_tenants() returns platform names scoped to selected tenants",
+          "Two-sheet Excel builder: _build_excel() now accepts optional stats + leaderboard params; when provided, creates a Dashboard sheet (estate summary + top-10 leaderboard with color-coded severity fills) as Sheet 1 and the CVE Data sheet as Sheet 2; _write_dashboard_sheet() and _write_cve_data_sheet() extracted as private helpers for reuse by both Export All and notification attachments",
+          "DEFAULT_NOTIFICATION_CONFIG extended with filter_tenant_ids: [] and filter_platforms: [] fields (empty list = no filter / include all)",
           "Scan history table: new scan_history SQLite table records a snapshot after every completed global scan — scanned_at, duration_seconds, total/physical/VM device counts, vulnerable/critical/high device counts, total CVEs, peak score, NVD queried/cached/total counts; migration adds the table automatically on startup",
           "GET /api/scan-history: returns the last N scan snapshots (default 20, max 50) for the history table in the frontend",
           "GET /api/scan-trends: returns the two most recent scan snapshots plus computed integer/float deltas for every tracked metric — powers the delta badges on estate stat cards and the Scan Comparison panel",

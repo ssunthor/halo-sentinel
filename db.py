@@ -361,6 +361,16 @@ def load_tenant_summary(tenant_id: str) -> dict:
 # Leaderboard
 # ---------------------------------------------------------------------------
 
+def get_all_tenants() -> list[dict]:
+    """Return every tenant row, sorted alphabetically. No limit, no device-count filter."""
+    rows = _connect().execute("""
+        SELECT tenant_id, name, total_devices
+        FROM tenants
+        ORDER BY name ASC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_leaderboard(limit: int = 100, min_devices: int = 1) -> list[dict]:
     rows = _connect().execute("""
         SELECT

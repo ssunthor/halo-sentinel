@@ -1799,9 +1799,9 @@ async def get_leaderboard(limit: int = 100, min_devices: int = 1):
 
 @app.get("/api/tenants")
 async def get_all_tenants():
-    """Return every scanned tenant — no limit — for use in filter pickers."""
+    """Return every tenant row alphabetically — no limit, no device-count filter."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(thread_pool, db.get_leaderboard, 999999, 0)
+    return await loop.run_in_executor(thread_pool, db.get_all_tenants)
 
 
 @app.get("/api/changelog")

@@ -2,12 +2,13 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
+import Image from '@tiptap/extension-image';
 import TextAlign from '@tiptap/extension-text-align';
 import { useEffect, useCallback } from 'react';
 import {
   Bold, Italic, Underline as UnderlineIcon, Strikethrough,
   Link2, List, ListOrdered, AlignLeft, AlignCenter, AlignRight,
-  Undo2, Redo2, Eraser,
+  Undo2, Redo2, Eraser, ImagePlus,
 } from 'lucide-react';
 import './RichEditor.css';
 
@@ -35,6 +36,7 @@ export default function RichEditor({ value, onChange, placeholder = 'Enter messa
       StarterKit,
       Underline,
       Link.configure({ openOnClick: false, autolink: true }),
+      Image.configure({ allowBase64: false, inline: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
     ],
     content: value || '',
@@ -51,6 +53,13 @@ export default function RichEditor({ value, onChange, placeholder = 'Enter messa
       editor.commands.setContent(value || '', false);
     }
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const insertImage = useCallback(() => {
+    if (!editor) return;
+    const url = window.prompt('Image URL', 'https://');
+    if (!url || !url.trim()) return;
+    editor.chain().focus().setImage({ src: url.trim() }).run();
+  }, [editor]);
 
   const setLink = useCallback(() => {
     if (!editor) return;
@@ -99,7 +108,8 @@ export default function RichEditor({ value, onChange, placeholder = 'Enter messa
         <Btn title="Italic"        active={e.isActive('italic')}    onClick={() => e.chain().focus().toggleItalic().run()}>    <Italic        size={13} /></Btn>
         <Btn title="Underline"     active={e.isActive('underline')} onClick={() => e.chain().focus().toggleUnderline().run()}> <UnderlineIcon size={13} /></Btn>
         <Btn title="Strikethrough" active={e.isActive('strike')}    onClick={() => e.chain().focus().toggleStrike().run()}>    <Strikethrough size={13} /></Btn>
-        <Btn title="Link"          active={e.isActive('link')}      onClick={setLink}>                                         <Link2         size={13} /></Btn>
+        <Btn title="Link"         active={e.isActive('link')} onClick={setLink}>      <Link2     size={13} /></Btn>
+        <Btn title="Insert image"                             onClick={insertImage}> <ImagePlus size={13} /></Btn>
 
         <Sep />
 

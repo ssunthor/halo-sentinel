@@ -28,6 +28,19 @@
 .rich-editor-content .ProseMirror code { background: #111827; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.85em; font-family: monospace; }
 .rich-editor-content .ProseMirror hr   { border: none; border-top: 1px solid #374151; margin: 0.75rem 0; }
 
+.rich-editor-content .ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+  margin: 8px 0;
+  cursor: default;
+}
+.rich-editor-content .ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid #34d399;
+  outline-offset: 2px;
+}
+
 .rich-editor-content .ProseMirror p.is-editor-empty:first-child::before {
   color: #4b5563;
   content: attr(data-placeholder);

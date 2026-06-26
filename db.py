@@ -487,6 +487,60 @@ def get_severity_breakdown() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Drilldown queries (device lists for dashboard widget click-through)
+# ---------------------------------------------------------------------------
+
+_DRILLDOWN_COLS = """
+    t.name                      AS tenant_name,
+    d.resource_name,
+    d.pon,
+    d.platform_name,
+    d.resource_type             AS device_type,
+    d.os_version                AS current_firmware,
+    d.recommended_version,
+    d.serial,
+    d.highest_severity_score    AS cve_score,
+    d.resource_category,
+    (SELECT COUNT(*) FROM cves c2 WHERE c2.device_id = d.id) AS cve_count
+"""
+
+
+def get_devices_by_severity(severity: str) -> list[dict]:
+    rows = _connect().execute(f"""
+        SELECT DISTINCT {_DRILLDOWN_COLS}
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        JOIN cves c ON c.device_id = d.id
+        WHERE UPPER(c.severity) = ?
+        ORDER BY t.name ASC, d.highest_severity_score DESC
+    """, (severity.upper(),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_devices_by_platform(platform: str) -> list[dict]:
+    rows = _connect().execute(f"""
+        SELECT {_DRILLDOWN_COLS}
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        WHERE d.platform_name = ? AND d.is_vulnerable = 1
+        ORDER BY t.name ASC, d.highest_severity_score DESC
+    """, (platform,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_devices_by_cve(cve_id: str) -> list[dict]:
+    rows = _connect().execute(f"""
+        SELECT DISTINCT {_DRILLDOWN_COLS}
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        JOIN cves c ON c.device_id = d.id
+        WHERE c.cve_id = ?
+        ORDER BY t.name ASC, d.highest_severity_score DESC
+    """, (cve_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # LLM back-fill helpers
 # ---------------------------------------------------------------------------
 

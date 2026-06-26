@@ -8,6 +8,7 @@
       {
         "category": "✨ Features",
         "items": [
+          "Dashboard drilldown overlays: click any severity band, platform, or CVE in the dashboard info panels to open a centered modal showing every affected device grouped by tenant — includes search/filter bar, full device detail (platform, current/recommended firmware, CVE score, serial, PON), and Export XLS button that downloads a single-sheet workbook of the filtered device list",
           "Notification report filters: each notification now supports a Customer Filter (multi-select from all scanned tenants) and a Platform / Vendor Filter (dynamically populated based on selected customers) — leaving both empty reports the full estate; filter summary badge shown on notification cards; exported XLS and email body both respect the active filters",
           "Two-sheet XLS export: 'Export All' download now produces a two-tab workbook — Dashboard sheet (estate summary stats + top-10 client leaderboard with color-coded CVE severity) and CVE Data sheet (full per-device CVE rows); per-tenant exports retain the single-sheet format",
           "Scan trend tracking: every completed global scan is recorded in a new scan_history table; estate stat cards show delta badges (▲/▼ with color-coded good/bad direction) compared to the previous scan; new Scan Comparison panel shows current vs previous values for inventory (total, physical, VMs), exposure (vulnerable, critical, high, CVEs, peak score), and NVD query efficiency (cache hits, API calls, duration); collapsible Scan History table at the bottom shows all recorded scans in chronological order",
@@ -35,6 +36,9 @@
       {
         "category": "✨ Features",
         "items": [
+          "Drilldown API: GET /api/drilldown?type={severity|platform|cve}&value=X returns all matching devices sorted by tenant for the dashboard click-through overlays; GET /api/export/drilldown exports the same result as a single-sheet XLS; backed by get_devices_by_severity(), get_devices_by_platform(), get_devices_by_cve() in db.py",
+          "Daily scan scheduler: new background task triggers run_global_scan() once per day at DAILY_SCAN_TIME_UTC (default 02:00 UTC, configurable via env var) — previously scans only ran via manual UI trigger",
+          "GET /api/tenants: returns every tenant alphabetically with no limit or device-count filter, for use in filter pickers (replaces abusing leaderboard endpoint with limit=500)",
           "GET /api/config/vendors: returns distinct platform_name values in use across the estate, optionally filtered by tenant_ids query param — used by the frontend to populate the dynamic vendor/platform filter list in notification settings",
           "get_export_rows() now includes recommended_version in SELECT so the Recommended Firmware column in XLS exports is populated from NVD CPE data where available",
           "get_export_rows() extended with tenant_ids and platforms filter params: notification scheduler and test-send both pass active filter lists so emailed attachments contain only the filtered subset; get_vendors_for_tenants() returns platform names scoped to selected tenants",

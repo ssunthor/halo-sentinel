@@ -1790,6 +1790,45 @@ async def export_tenant(tenant_id: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# Drilldown endpoints (dashboard widget click-through)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/drilldown")
+async def drilldown(type: str, value: str):
+    """Return device list for a dashboard widget drilldown."""
+    loop = asyncio.get_running_loop()
+    if type == "severity":
+        return await loop.run_in_executor(thread_pool, db.get_devices_by_severity, value)
+    elif type == "platform":
+        return await loop.run_in_executor(thread_pool, db.get_devices_by_platform, value)
+    elif type == "cve":
+        return await loop.run_in_executor(thread_pool, db.get_devices_by_cve, value)
+    raise HTTPException(status_code=400, detail=f"Unknown drilldown type: {type}")
+
+
+@app.get("/api/export/drilldown")
+async def export_drilldown(type: str, value: str):
+    """Download a single-sheet XLS for a drilldown query."""
+    loop = asyncio.get_running_loop()
+    if type == "severity":
+        rows = await loop.run_in_executor(thread_pool, db.get_devices_by_severity, value)
+    elif type == "platform":
+        rows = await loop.run_in_executor(thread_pool, db.get_devices_by_platform, value)
+    elif type == "cve":
+        rows = await loop.run_in_executor(thread_pool, db.get_devices_by_cve, value)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown drilldown type: {type}")
+    xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows)
+    safe = re.sub(r'[^\w\-]', '_', value)
+    fname = f"drilldown_{type}_{safe}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
 @app.get("/api/leaderboard")
 async def get_leaderboard(limit: int = 100, min_devices: int = 1):
     """

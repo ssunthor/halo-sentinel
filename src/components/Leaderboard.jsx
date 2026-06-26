@@ -3,7 +3,7 @@ import {
   Shield, TrendingUp, TrendingDown, Minus, RefreshCw, Download,
   ChevronUp, ChevronDown, Search, X, AlertTriangle, Activity,
   Server, Layers, Bug, Cpu, Zap, Clock, CheckCircle2, DatabaseZap,
-  BarChart3, ListTodo, History, ArrowUp, ArrowDown,
+  BarChart3, ListTodo, History, ArrowUp, ArrowDown, ExternalLink,
 } from 'lucide-react';
 import { InfoTip } from './Tooltip';
 
@@ -91,6 +91,146 @@ function DeltaBadge({ delta, goodWhenDown = false, decimals = 0, suffix = '' }) 
 }
 
 // ---------------------------------------------------------------------------
+// Drilldown modal — device list for severity / platform / CVE click-through
+// ---------------------------------------------------------------------------
+function DrilldownModal({ drilldown, onClose, apiBase }) {
+  const [devices, setDevices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch]   = useState('');
+
+  useEffect(() => {
+    if (!drilldown) return;
+    setLoading(true);
+    setSearch('');
+    fetch(`${apiBase}/api/drilldown?type=${encodeURIComponent(drilldown.type)}&value=${encodeURIComponent(drilldown.value)}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setDevices(Array.isArray(data) ? data : []))
+      .catch(() => setDevices([]))
+      .finally(() => setLoading(false));
+  }, [drilldown, apiBase]);
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  if (!drilldown) return null;
+
+  const filtered = devices.filter(d => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (d.tenant_name || '').toLowerCase().includes(q)
+      || (d.resource_name || '').toLowerCase().includes(q)
+      || (d.platform_name || '').toLowerCase().includes(q)
+      || (d.serial || '').toLowerCase().includes(q)
+      || (d.pon || '').toLowerCase().includes(q);
+  });
+
+  const tenantGroups = [];
+  let currentTenant = null;
+  for (const d of filtered) {
+    if (d.tenant_name !== currentTenant) {
+      currentTenant = d.tenant_name;
+      tenantGroups.push({ name: currentTenant, devices: [] });
+    }
+    tenantGroups[tenantGroups.length - 1].devices.push(d);
+  }
+
+  const exportUrl = `${apiBase}/api/export/drilldown?type=${encodeURIComponent(drilldown.type)}&value=${encodeURIComponent(drilldown.value)}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div
+        className="relative bg-gray-950 border border-gray-800 rounded-2xl shadow-2xl w-[95vw] max-w-6xl max-h-[85vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+          <div>
+            <h2 className="text-base font-bold text-white">{drilldown.label}</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {loading ? 'Loading…' : `${filtered.length} device${filtered.length !== 1 ? 's' : ''} across ${tenantGroups.length} client${tenantGroups.length !== 1 ? 's' : ''}`}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <a
+              href={exportUrl}
+              download
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-bold transition-colors"
+            >
+              <Download size={12} /> Export XLS
+            </a>
+            <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors p-1">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Search bar */}
+        <div className="px-6 py-2 border-b border-gray-800/60 flex-shrink-0">
+          <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1.5">
+            <Search size={12} className="text-gray-600" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Filter by tenant, device, platform, serial…"
+              className="flex-grow bg-transparent text-xs text-white placeholder-gray-600 focus:outline-none"
+            />
+            {search && <button onClick={() => setSearch('')} className="text-gray-600 hover:text-white"><X size={11} /></button>}
+          </div>
+        </div>
+
+        {/* Device table */}
+        <div className="flex-grow overflow-y-auto px-6 py-3">
+          {loading ? (
+            <div className="flex items-center justify-center py-16 text-gray-500 text-sm">
+              <RefreshCw size={14} className="animate-spin mr-2" /> Loading devices…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-16 text-gray-600 text-sm">No devices found.</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-950 z-10">
+                <tr className="border-b border-gray-800">
+                  {['Client','Device Name','Platform','Current FW','Recommended FW','CVE Score','CVEs','Serial','PON'].map(h => (
+                    <th key={h} className="text-left py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tenantGroups.map((group) =>
+                  group.devices.map((d, di) => (
+                    <tr key={`${group.name}-${di}`} className="border-b border-gray-800/40 hover:bg-gray-900/60 transition-colors">
+                      {di === 0 ? (
+                        <td className="py-2 px-2 font-semibold text-white align-top whitespace-nowrap" rowSpan={group.devices.length}>
+                          {group.name}
+                          <span className="text-[10px] text-gray-600 font-normal ml-1.5">({group.devices.length})</span>
+                        </td>
+                      ) : null}
+                      <td className="py-2 px-2 text-gray-300 truncate max-w-[180px]" title={d.resource_name}>{d.resource_name || '—'}</td>
+                      <td className="py-2 px-2 text-gray-400 whitespace-nowrap">{d.platform_name || '—'}</td>
+                      <td className="py-2 px-2 text-gray-400 font-mono">{d.current_firmware || d.os_version || '—'}</td>
+                      <td className="py-2 px-2 text-amber-400 font-mono">{d.recommended_version || '—'}</td>
+                      <td className={`py-2 px-2 font-mono font-bold ${scoreColor(d.cve_score)}`}>{(d.cve_score || 0).toFixed(1)}</td>
+                      <td className="py-2 px-2 text-gray-400 text-center">{d.cve_count || 0}</td>
+                      <td className="py-2 px-2 text-gray-500 font-mono">{d.serial || '—'}</td>
+                      <td className="py-2 px-2 text-gray-500 font-mono">{d.pon || '—'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Sub-panels
 // ---------------------------------------------------------------------------
 const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', tooltip, delta, deltaGoodWhenDown, deltaSuffix, deltaDecimals }) => (
@@ -109,7 +249,7 @@ const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', toolti
   </div>
 );
 
-const SeverityPanel = ({ breakdown }) => {
+const SeverityPanel = ({ breakdown, onDrilldown }) => {
   const order = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
   const total = Object.values(breakdown || {}).reduce((s, v) => s + v, 0);
   if (!total) return null;
@@ -118,7 +258,7 @@ const SeverityPanel = ({ breakdown }) => {
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
       <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-1.5">
         <AlertTriangle size={10} /> Severity Breakdown
-        <InfoTip content="Breakdown of all CVE instances across every scanned tenant by CVSS severity band. CRITICAL = 9.0–10.0, HIGH = 7.0–8.9, MEDIUM = 4.0–6.9, LOW = 0.1–3.9. One device with multiple CVEs contributes one count per CVE." position="bottom" />
+        <InfoTip content="Breakdown of all CVE instances across every scanned tenant by CVSS severity band. CRITICAL = 9.0–10.0, HIGH = 7.0–8.9, MEDIUM = 4.0–6.9, LOW = 0.1–3.9. One device with multiple CVEs contributes one count per CVE. Click a severity band to view all affected devices." position="bottom" />
       </div>
       <div className="space-y-2">
         {order.map(sev => {
@@ -127,7 +267,11 @@ const SeverityPanel = ({ breakdown }) => {
           const pct = Math.round((count / total) * 100);
           const cfg = SEV_CFG[sev] || SEV_CFG.UNKNOWN;
           return (
-            <div key={sev}>
+            <div
+              key={sev}
+              className="cursor-pointer hover:bg-gray-800/60 rounded-lg px-1.5 py-1 -mx-1.5 transition-colors"
+              onClick={() => onDrilldown?.({ type: 'severity', value: sev, label: `${sev} Severity Devices` })}
+            >
               <div className="flex justify-between text-xs mb-1">
                 <span className={`font-semibold ${cfg.text}`}>{sev}</span>
                 <span className="text-gray-400 font-mono">{fmt(count)} <span className="text-gray-600">({pct}%)</span></span>
@@ -146,15 +290,19 @@ const SeverityPanel = ({ breakdown }) => {
   );
 };
 
-const PlatformPanel = ({ platforms }) => (
+const PlatformPanel = ({ platforms, onDrilldown }) => (
   <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-1.5">
       <Layers size={10} /> Top Platforms by Exposure
-      <InfoTip content="OS/firmware platforms ranked by number of vulnerable devices. The progress bar shows what percentage of that platform's devices have at least one CVE. Max score is the highest single CVE score found on any device running that platform." position="bottom" />
+      <InfoTip content="OS/firmware platforms ranked by number of vulnerable devices. The progress bar shows what percentage of that platform's devices have at least one CVE. Click a platform to view all affected devices." position="bottom" />
     </div>
     <div className="space-y-2">
       {(platforms || []).slice(0, 8).map((p, i) => (
-        <div key={i} className="flex items-center gap-2">
+        <div
+          key={i}
+          className="flex items-center gap-2 cursor-pointer hover:bg-gray-800/60 rounded-lg px-1.5 py-1 -mx-1.5 transition-colors"
+          onClick={() => onDrilldown?.({ type: 'platform', value: p.platform, label: `${p.platform} — Vulnerable Devices` })}
+        >
           <span className="text-gray-700 font-mono text-[10px] w-4 text-right">{i + 1}</span>
           <div className="flex-grow min-w-0">
             <div className="flex justify-between items-center mb-0.5">
@@ -181,15 +329,19 @@ const PlatformPanel = ({ platforms }) => (
   </div>
 );
 
-const TopCvesPanel = ({ cves }) => (
+const TopCvesPanel = ({ cves, onDrilldown }) => (
   <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-1.5">
       <Bug size={10} /> Most Widespread CVEs
-      <InfoTip content="CVEs that appear on the most devices across the entire estate, sorted by device count. Click any CVE ID to open its full NVD detail page. Widespread CVEs are highest-priority for patching because a single fix protects the most assets." position="bottom" />
+      <InfoTip content="CVEs that appear on the most devices across the entire estate, sorted by device count. Click any row to view all affected devices. Click the CVE ID link to open its full NVD detail page." position="bottom" />
     </div>
     <div className="space-y-1.5">
       {(cves || []).slice(0, 8).map((c, i) => (
-        <div key={i} className="flex items-start gap-2 group">
+        <div
+          key={i}
+          className="flex items-start gap-2 group cursor-pointer hover:bg-gray-800/60 rounded-lg px-1.5 py-1 -mx-1.5 transition-colors"
+          onClick={() => onDrilldown?.({ type: 'cve', value: c.cve_id, label: `${c.cve_id} — Affected Devices` })}
+        >
           <span className="text-gray-700 font-mono text-[10px] w-4 text-right flex-shrink-0 mt-0.5">{i + 1}</span>
           <div className="flex-grow min-w-0">
             <div className="flex items-center gap-2 mb-0.5">
@@ -541,6 +693,7 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
   const [sortBy, setSortBy] = useState('max_score');
   const [sortDir, setSortDir] = useState('desc');
   const [filter, setFilter] = useState('');
+  const [drilldown, setDrilldown] = useState(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -712,9 +865,9 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
 
           {/* ── Info panels ── */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-            <SeverityPanel breakdown={stats?.severity_breakdown} />
-            <PlatformPanel platforms={stats?.top_platforms} />
-            <TopCvesPanel cves={stats?.top_cves} />
+            <SeverityPanel breakdown={stats?.severity_breakdown} onDrilldown={setDrilldown} />
+            <PlatformPanel platforms={stats?.top_platforms} onDrilldown={setDrilldown} />
+            <TopCvesPanel cves={stats?.top_cves} onDrilldown={setDrilldown} />
             <ScanTrendsPanel trends={trends} />
             <AiStatsPanel apiBase={apiBase} />
           </div>
@@ -860,6 +1013,12 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
           </div>
         </>
       )}
+
+      <DrilldownModal
+        drilldown={drilldown}
+        onClose={() => setDrilldown(null)}
+        apiBase={apiBase}
+      />
     </div>
   );
 }

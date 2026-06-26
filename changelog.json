@@ -2,8 +2,8 @@
   {
     "id": "FRONTEND",
     "service": "Dashboard Frontend",
-    "version": "2026.06.16",
-    "date": "2026-06-16",
+    "version": "2026.06.26",
+    "date": "2026-06-26",
     "changes": [
       {
         "category": "✨ Features",
@@ -30,8 +30,8 @@
   {
     "id": "BACKEND",
     "service": "Backend API",
-    "version": "2026.06.16",
-    "date": "2026-06-16",
+    "version": "2026.06.26",
+    "date": "2026-06-26",
     "changes": [
       {
         "category": "✨ Features",

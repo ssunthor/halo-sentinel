@@ -70,6 +70,8 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "password")
 
+DAILY_SCAN_TIME_UTC = os.getenv("DAILY_SCAN_TIME_UTC", "02:00")
+
 CACHE_DIR = "/app/cache"
 CVE_CACHE_FILE = os.path.join(CACHE_DIR, "cve_cache.json")
 LLM_ANALYSIS_CACHE_FILE = os.path.join(CACHE_DIR, "llm_analysis_cache.json")
@@ -1976,6 +1978,32 @@ async def notification_scheduler():
             print(f"❌ Notification scheduler error: {e}")
 
 
+async def daily_scan_scheduler():
+    """Background task: trigger a global scan once per day at DAILY_SCAN_TIME_UTC."""
+    try:
+        h, m = [int(x) for x in DAILY_SCAN_TIME_UTC.strip().split(":")]
+    except ValueError:
+        print(f"⚠️  Invalid DAILY_SCAN_TIME_UTC '{DAILY_SCAN_TIME_UTC}', defaulting to 02:00")
+        h, m = 2, 0
+
+    print(f"✅ Daily scan scheduler started (fires at {h:02d}:{m:02d} UTC).")
+    while True:
+        await asyncio.sleep(30)
+        now = datetime.now(timezone.utc)
+        if now.hour != h or now.minute != m:
+            continue
+
+        global _global_scan_task
+        if _global_scan_task and not _global_scan_task.done():
+            continue
+
+        print(f"🔄 Daily scheduled scan triggered at {now.strftime('%Y-%m-%d %H:%M UTC')}")
+        _global_scan_task = asyncio.create_task(run_global_scan())
+
+        # Sleep past the current minute to avoid re-triggering
+        await asyncio.sleep(60)
+
+
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Defense Halo Customer CVE Analyzer starting...")
@@ -1996,6 +2024,7 @@ async def startup_event():
     print("✅ LLM back-fill worker scheduled.")
     asyncio.create_task(notification_scheduler())
     print("✅ Notification scheduler started.")
+    asyncio.create_task(daily_scan_scheduler())
     print("✅ Ready.")
 
 

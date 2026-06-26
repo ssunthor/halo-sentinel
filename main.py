@@ -1933,9 +1933,11 @@ def _should_fire(cfg: dict, now: datetime) -> bool:
     if last:
         try:
             last_dt = datetime.fromisoformat(last)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
             if (now - last_dt).total_seconds() < 90:
                 return False
-        except ValueError:
+        except (ValueError, TypeError):
             pass
 
     return True
@@ -1949,7 +1951,7 @@ async def notification_scheduler():
         try:
             loop = asyncio.get_running_loop()
             notifications = await loop.run_in_executor(thread_pool, db.list_notifications)
-            now = datetime.now(timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
+            now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
             for cfg in notifications:
                 if not _should_fire(cfg, now):

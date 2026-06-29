@@ -94,18 +94,25 @@ function DeltaBadge({ delta, goodWhenDown = false, decimals = 0, suffix = '' }) 
 // Drilldown modal — device list for severity / platform / CVE click-through
 // ---------------------------------------------------------------------------
 function DrilldownModal({ drilldown, onClose, apiBase }) {
-  const [devices, setDevices] = useState([]);
+  const [data, setData]       = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState('');
+
+  const mode = drilldown?.type === 'clients' ? 'clients'
+             : drilldown?.type === 'cve_instances' ? 'cve_instances'
+             : 'devices';
 
   useEffect(() => {
     if (!drilldown) return;
     setLoading(true);
     setSearch('');
-    fetch(`${apiBase}/api/drilldown?type=${encodeURIComponent(drilldown.type)}&value=${encodeURIComponent(drilldown.value)}`)
+    const qs = drilldown.value
+      ? `type=${encodeURIComponent(drilldown.type)}&value=${encodeURIComponent(drilldown.value)}`
+      : `type=${encodeURIComponent(drilldown.type)}`;
+    fetch(`${apiBase}/api/drilldown?${qs}`)
       .then(r => r.ok ? r.json() : [])
-      .then(data => setDevices(Array.isArray(data) ? data : []))
-      .catch(() => setDevices([]))
+      .then(d => setData(Array.isArray(d) ? d : []))
+      .catch(() => setData([]))
       .finally(() => setLoading(false));
   }, [drilldown, apiBase]);
 
@@ -117,9 +124,18 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
 
   if (!drilldown) return null;
 
-  const filtered = devices.filter(d => {
-    if (!search) return true;
-    const q = search.toLowerCase();
+  const q = search.toLowerCase();
+  const filtered = data.filter(d => {
+    if (!q) return true;
+    if (mode === 'clients') {
+      return (d.name || '').toLowerCase().includes(q);
+    }
+    if (mode === 'cve_instances') {
+      return (d.tenant_name || '').toLowerCase().includes(q)
+        || (d.resource_name || '').toLowerCase().includes(q)
+        || (d.cve_id || '').toLowerCase().includes(q)
+        || (d.platform_name || '').toLowerCase().includes(q);
+    }
     return (d.tenant_name || '').toLowerCase().includes(q)
       || (d.resource_name || '').toLowerCase().includes(q)
       || (d.platform_name || '').toLowerCase().includes(q)
@@ -127,17 +143,32 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
       || (d.pon || '').toLowerCase().includes(q);
   });
 
+  // Group devices by tenant (only for device-mode tables)
   const tenantGroups = [];
-  let currentTenant = null;
-  for (const d of filtered) {
-    if (d.tenant_name !== currentTenant) {
-      currentTenant = d.tenant_name;
-      tenantGroups.push({ name: currentTenant, devices: [] });
+  if (mode === 'devices') {
+    let cur = null;
+    for (const d of filtered) {
+      if (d.tenant_name !== cur) {
+        cur = d.tenant_name;
+        tenantGroups.push({ name: cur, devices: [] });
+      }
+      tenantGroups[tenantGroups.length - 1].devices.push(d);
     }
-    tenantGroups[tenantGroups.length - 1].devices.push(d);
   }
 
-  const exportUrl = `${apiBase}/api/export/drilldown?type=${encodeURIComponent(drilldown.type)}&value=${encodeURIComponent(drilldown.value)}`;
+  const exportQs = drilldown.value
+    ? `type=${encodeURIComponent(drilldown.type)}&value=${encodeURIComponent(drilldown.value)}`
+    : `type=${encodeURIComponent(drilldown.type)}`;
+  const exportUrl = `${apiBase}/api/export/drilldown?${exportQs}`;
+
+  const subtitle = loading ? 'Loading…'
+    : mode === 'clients' ? `${filtered.length} client${filtered.length !== 1 ? 's' : ''}`
+    : mode === 'cve_instances' ? `${filtered.length} CVE instance${filtered.length !== 1 ? 's' : ''}`
+    : `${filtered.length} device${filtered.length !== 1 ? 's' : ''} across ${tenantGroups.length} client${tenantGroups.length !== 1 ? 's' : ''}`;
+
+  const placeholder = mode === 'clients' ? 'Search clients…'
+    : mode === 'cve_instances' ? 'Search by CVE ID, device, tenant, platform…'
+    : 'Filter by tenant, device, platform, serial…';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
@@ -150,48 +181,93 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
           <div>
             <h2 className="text-base font-bold text-white">{drilldown.label}</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {loading ? 'Loading…' : `${filtered.length} device${filtered.length !== 1 ? 's' : ''} across ${tenantGroups.length} client${tenantGroups.length !== 1 ? 's' : ''}`}
-            </p>
+            <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
           </div>
           <div className="flex items-center gap-3">
-            <a
-              href={exportUrl}
-              download
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-bold transition-colors"
-            >
+            <a href={exportUrl} download className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-bold transition-colors">
               <Download size={12} /> Export XLS
             </a>
-            <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors p-1">
-              <X size={18} />
-            </button>
+            <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors p-1"><X size={18} /></button>
           </div>
         </div>
 
-        {/* Search bar */}
+        {/* Search */}
         <div className="px-6 py-2 border-b border-gray-800/60 flex-shrink-0">
           <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1.5">
             <Search size={12} className="text-gray-600" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Filter by tenant, device, platform, serial…"
-              className="flex-grow bg-transparent text-xs text-white placeholder-gray-600 focus:outline-none"
-            />
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={placeholder}
+              className="flex-grow bg-transparent text-xs text-white placeholder-gray-600 focus:outline-none" />
             {search && <button onClick={() => setSearch('')} className="text-gray-600 hover:text-white"><X size={11} /></button>}
           </div>
         </div>
 
-        {/* Device table */}
+        {/* Table body */}
         <div className="flex-grow overflow-y-auto px-6 py-3">
           {loading ? (
             <div className="flex items-center justify-center py-16 text-gray-500 text-sm">
-              <RefreshCw size={14} className="animate-spin mr-2" /> Loading devices…
+              <RefreshCw size={14} className="animate-spin mr-2" /> Loading…
             </div>
           ) : filtered.length === 0 ? (
-            <div className="text-center py-16 text-gray-600 text-sm">No devices found.</div>
+            <div className="text-center py-16 text-gray-600 text-sm">No results found.</div>
+          ) : mode === 'clients' ? (
+            /* ── Clients table ── */
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-950 z-10">
+                <tr className="border-b border-gray-800">
+                  {['Client','Devices','Vulnerable','Vuln %','CVE Score','Risk','Trend','Last Scan'].map(h => (
+                    <th key={h} className="text-left py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((c, i) => (
+                  <tr key={i} className="border-b border-gray-800/40 hover:bg-gray-900/60 transition-colors">
+                    <td className="py-2 px-2 font-semibold text-white">{c.name}</td>
+                    <td className="py-2 px-2 text-gray-300 font-mono">{fmt(c.total_devices)}</td>
+                    <td className={`py-2 px-2 font-mono font-bold ${c.vulnerable_devices > 0 ? 'text-orange-400' : 'text-green-500'}`}>{fmt(c.vulnerable_devices)}</td>
+                    <td className="py-2 px-2 text-gray-400 font-mono">{c.vuln_pct ?? 0}%</td>
+                    <td className={`py-2 px-2 font-mono font-bold ${scoreColor(c.max_score)}`}>{(c.max_score || 0).toFixed(1)}</td>
+                    <td className="py-2 px-2">{c.risk_posture ? <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase ${postureStyle(c.risk_posture)}`}>{c.risk_posture}</span> : <span className="text-gray-700">—</span>}</td>
+                    <td className="py-2 px-2"><TrendIcon trend={c.trend} /></td>
+                    <td className="py-2 px-2 text-gray-600">{formatAge(c.scanned_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : mode === 'cve_instances' ? (
+            /* ── CVE instances table ── */
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-950 z-10">
+                <tr className="border-b border-gray-800">
+                  {['Client','Device','Platform','Firmware','CVE ID','Score','Severity','Description'].map(h => (
+                    <th key={h} className="text-left py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((c, i) => (
+                  <tr key={i} className="border-b border-gray-800/40 hover:bg-gray-900/60 transition-colors">
+                    <td className="py-2 px-2 text-white whitespace-nowrap">{c.tenant_name}</td>
+                    <td className="py-2 px-2 text-gray-300 truncate max-w-[150px]" title={c.resource_name}>{c.resource_name || '—'}</td>
+                    <td className="py-2 px-2 text-gray-400 whitespace-nowrap">{c.platform_name || '—'}</td>
+                    <td className="py-2 px-2 text-gray-400 font-mono">{c.current_firmware || '—'}</td>
+                    <td className="py-2 px-2">
+                      <a href={`https://nvd.nist.gov/vuln/detail/${c.cve_id}`} target="_blank" rel="noopener noreferrer"
+                        className="text-blue-400 hover:underline font-mono font-bold" onClick={e => e.stopPropagation()}>
+                        {c.cve_id}
+                      </a>
+                    </td>
+                    <td className={`py-2 px-2 font-mono font-bold ${scoreColor(c.score)}`}>{(c.score || 0).toFixed(1)}</td>
+                    <td className="py-2 px-2">
+                      {c.severity ? <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase ${postureStyle(c.severity)}`}>{c.severity}</span> : '—'}
+                    </td>
+                    <td className="py-2 px-2 text-gray-500 truncate max-w-[250px]" title={c.description}>{c.description || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           ) : (
+            /* ── Devices table (default) ── */
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-gray-950 z-10">
                 <tr className="border-b border-gray-800">
@@ -233,8 +309,11 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
 // ---------------------------------------------------------------------------
 // Sub-panels
 // ---------------------------------------------------------------------------
-const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', tooltip, delta, deltaGoodWhenDown, deltaSuffix, deltaDecimals }) => (
-  <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-1">
+const StatCard = ({ label, value, sub, icon: Icon, accent = 'text-white', tooltip, delta, deltaGoodWhenDown, deltaSuffix, deltaDecimals, onClick }) => (
+  <div
+    className={`bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-1 ${onClick ? 'cursor-pointer hover:border-gray-600 hover:bg-gray-800/60 transition-colors' : ''}`}
+    onClick={onClick}
+  >
     <div className="flex items-center gap-1.5 text-gray-500 text-xs uppercase tracking-wider font-semibold">
       {Icon && <Icon size={12} />}{label}
       {tooltip && <InfoTip content={tooltip} position="bottom" size={10} />}
@@ -817,7 +896,8 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
               icon={Shield} label="Clients Scanned" accent="text-green-400"
               value={fmt(estate.total_tenants)}
               delta={hasTrend ? d.total_tenants : null}
-              tooltip="Number of unique NetBox tenants that have been scanned at least once. Click any client row in the rankings table to view its full vulnerability report."
+              tooltip="Number of unique NetBox tenants that have been scanned at least once. Click to view all scanned clients."
+              onClick={() => setDrilldown({ type: 'clients', value: '', label: 'Scanned Clients' })}
             />
             <StatCard
               icon={Server} label="Total Devices"
@@ -826,7 +906,8 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
                 ? `${fmt(estate.physical_devices)} physical · ${fmt(estate.virtual_machines)} VMs`
                 : undefined}
               delta={hasTrend ? d.total_devices : null}
-              tooltip="Total physical devices and virtual machines across all scanned tenants. Sub-line shows the physical/VM split."
+              tooltip="Total physical devices and virtual machines across all scanned tenants. Click to view full device inventory."
+              onClick={() => setDrilldown({ type: 'all_devices', value: '', label: 'All Devices' })}
             />
             <StatCard
               icon={AlertTriangle} label="Vulnerable" accent="text-orange-400"
@@ -834,7 +915,8 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
               sub={estate.total_devices ? `${Math.round(100 * (estate.vulnerable_devices || 0) / estate.total_devices)}% of estate` : ''}
               delta={hasTrend ? d.vulnerable_devices : null}
               deltaGoodWhenDown
-              tooltip="Devices where the NVD API returned at least one matching CVE. The percentage shows how much of the total estate is affected."
+              tooltip="Devices where the NVD API returned at least one matching CVE. Click to view all vulnerable devices."
+              onClick={() => setDrilldown({ type: 'vulnerable', value: '', label: 'Vulnerable Devices' })}
             />
             <StatCard
               icon={AlertTriangle} label="Critical Devices"
@@ -843,14 +925,16 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
               sub="CVE score ≥ 9.0"
               delta={hasTrend ? d.critical_devices : null}
               deltaGoodWhenDown
-              tooltip="Devices carrying at least one CVE with a CVSS score of 9.0 or higher. These represent the highest-severity exposure and should be prioritized for immediate patching."
+              tooltip="Devices carrying at least one CVE with a CVSS score of 9.0 or higher. Click to view all critical devices."
+              onClick={() => setDrilldown({ type: 'critical', value: '', label: 'Critical Devices (CVE Score ≥ 9.0)' })}
             />
             <StatCard
               icon={Bug} label="CVE Instances" accent="text-yellow-400"
               value={fmt(estate.total_cve_instances)}
               delta={hasTrend ? d.total_cves : null}
               deltaGoodWhenDown
-              tooltip="Total count of individual CVE matches across all devices and all tenants. One device can contribute multiple CVE instances if multiple vulnerabilities were found."
+              tooltip="Total count of individual CVE matches across all devices and all tenants. Click to view every CVE instance."
+              onClick={() => setDrilldown({ type: 'cve_instances', value: '', label: 'All CVE Instances' })}
             />
             <StatCard
               icon={Activity} label="Peak CVE Score"
@@ -859,7 +943,8 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
               delta={hasTrend ? d.peak_score : null}
               deltaGoodWhenDown
               deltaDecimals={1}
-              tooltip="Highest individual CVE CVSS score found anywhere in the estate. A score of 10.0 is the maximum. This is the single most severe known vulnerability in the environment."
+              tooltip="Highest individual CVE CVSS score found anywhere in the estate. Click to view all devices at this score."
+              onClick={() => setDrilldown({ type: 'peak_score', value: '', label: `Devices at Peak Score (${(estate.max_score || 0).toFixed(1)})` })}
             />
           </div>
 

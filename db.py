@@ -540,6 +540,89 @@ def get_devices_by_cve(cve_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_all_clients_detail() -> list[dict]:
+    rows = _connect().execute("""
+        SELECT
+            t.tenant_id, t.name, t.scanned_at, t.total_devices,
+            t.vulnerable_devices, t.max_score,
+            CASE WHEN t.total_devices > 0
+                 THEN ROUND(100.0 * t.vulnerable_devices / t.total_devices, 1)
+                 ELSE 0.0 END AS vuln_pct,
+            s.risk_posture, s.trend
+        FROM tenants t
+        LEFT JOIN summaries s ON t.tenant_id = s.tenant_id
+        WHERE t.total_devices > 0
+        ORDER BY t.name ASC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_devices_list() -> list[dict]:
+    rows = _connect().execute(f"""
+        SELECT {_DRILLDOWN_COLS}
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        ORDER BY t.name ASC, d.highest_severity_score DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_vulnerable_devices() -> list[dict]:
+    rows = _connect().execute(f"""
+        SELECT {_DRILLDOWN_COLS}
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        WHERE d.is_vulnerable = 1
+        ORDER BY t.name ASC, d.highest_severity_score DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_critical_devices() -> list[dict]:
+    rows = _connect().execute(f"""
+        SELECT {_DRILLDOWN_COLS}
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        WHERE d.highest_severity_score >= 9.0
+        ORDER BY t.name ASC, d.highest_severity_score DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_cve_instances() -> list[dict]:
+    rows = _connect().execute("""
+        SELECT
+            t.name          AS tenant_name,
+            d.resource_name,
+            d.platform_name,
+            d.os_version    AS current_firmware,
+            c.cve_id,
+            c.score,
+            c.severity,
+            c.description
+        FROM cves c
+        JOIN devices d ON c.device_id = d.id
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        ORDER BY t.name ASC, c.score DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_devices_at_peak_score() -> list[dict]:
+    conn = _connect()
+    peak = conn.execute("SELECT MAX(highest_severity_score) FROM devices").fetchone()[0]
+    if not peak:
+        return []
+    rows = conn.execute(f"""
+        SELECT {_DRILLDOWN_COLS}
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        WHERE d.highest_severity_score = ?
+        ORDER BY t.name ASC, d.resource_name ASC
+    """, (peak,)).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # LLM back-fill helpers
 # ---------------------------------------------------------------------------

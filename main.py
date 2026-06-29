@@ -1794,33 +1794,95 @@ async def export_tenant(tenant_id: str):
 # Drilldown endpoints (dashboard widget click-through)
 # ---------------------------------------------------------------------------
 
+_DRILLDOWN_FETCHERS = {
+    "severity":      lambda v: db.get_devices_by_severity(v),
+    "platform":      lambda v: db.get_devices_by_platform(v),
+    "cve":           lambda v: db.get_devices_by_cve(v),
+    "clients":       lambda _: db.get_all_clients_detail(),
+    "all_devices":   lambda _: db.get_all_devices_list(),
+    "vulnerable":    lambda _: db.get_vulnerable_devices(),
+    "critical":      lambda _: db.get_critical_devices(),
+    "cve_instances": lambda _: db.get_all_cve_instances(),
+    "peak_score":    lambda _: db.get_devices_at_peak_score(),
+}
+
+
 @app.get("/api/drilldown")
-async def drilldown(type: str, value: str):
-    """Return device list for a dashboard widget drilldown."""
+async def drilldown(type: str, value: str = ""):
+    """Return data for a dashboard widget drilldown."""
+    fetcher = _DRILLDOWN_FETCHERS.get(type)
+    if not fetcher:
+        raise HTTPException(status_code=400, detail=f"Unknown drilldown type: {type}")
     loop = asyncio.get_running_loop()
-    if type == "severity":
-        return await loop.run_in_executor(thread_pool, db.get_devices_by_severity, value)
-    elif type == "platform":
-        return await loop.run_in_executor(thread_pool, db.get_devices_by_platform, value)
-    elif type == "cve":
-        return await loop.run_in_executor(thread_pool, db.get_devices_by_cve, value)
-    raise HTTPException(status_code=400, detail=f"Unknown drilldown type: {type}")
+    return await loop.run_in_executor(thread_pool, fetcher, value)
+
+
+def _build_generic_excel(rows: list, columns: list, title: str = "") -> bytes:
+    from io import BytesIO
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = title[:31] if title else "Data"
+
+    hdr_fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+    hdr_font = Font(color="FFFFFF", bold=True)
+    for col_idx, (header, _, width) in enumerate(columns, 1):
+        c = ws.cell(row=1, column=col_idx, value=header)
+        c.font = hdr_font
+        c.fill = hdr_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+    ws.row_dimensions[1].height = 20
+    ws.freeze_panes = "A2"
+
+    for ri, row in enumerate(rows, 2):
+        for col_idx, (_, key, _) in enumerate(columns, 1):
+            val = row.get(key)
+            if isinstance(val, float):
+                val = round(val, 1)
+            ws.cell(row=ri, column=col_idx, value=_xlsx_str(val) if isinstance(val, str) else val)
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+_CLIENT_COLUMNS = [
+    ("Client", "name", 30), ("Devices", "total_devices", 12),
+    ("Vulnerable", "vulnerable_devices", 14), ("Vuln %", "vuln_pct", 10),
+    ("CVE Score", "max_score", 12), ("Risk", "risk_posture", 14),
+    ("Trend", "trend", 10), ("Last Scan", "scanned_at", 22),
+]
+
+_CVE_INSTANCE_COLUMNS = [
+    ("Client", "tenant_name", 25), ("Device", "resource_name", 30),
+    ("Platform", "platform_name", 18), ("Firmware", "current_firmware", 18),
+    ("CVE ID", "cve_id", 20), ("Score", "score", 10),
+    ("Severity", "severity", 12), ("Description", "description", 60),
+]
 
 
 @app.get("/api/export/drilldown")
-async def export_drilldown(type: str, value: str):
+async def export_drilldown(type: str, value: str = ""):
     """Download a single-sheet XLS for a drilldown query."""
-    loop = asyncio.get_running_loop()
-    if type == "severity":
-        rows = await loop.run_in_executor(thread_pool, db.get_devices_by_severity, value)
-    elif type == "platform":
-        rows = await loop.run_in_executor(thread_pool, db.get_devices_by_platform, value)
-    elif type == "cve":
-        rows = await loop.run_in_executor(thread_pool, db.get_devices_by_cve, value)
-    else:
+    fetcher = _DRILLDOWN_FETCHERS.get(type)
+    if not fetcher:
         raise HTTPException(status_code=400, detail=f"Unknown drilldown type: {type}")
-    xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows)
-    safe = re.sub(r'[^\w\-]', '_', value)
+    loop = asyncio.get_running_loop()
+    rows = await loop.run_in_executor(thread_pool, fetcher, value)
+
+    if type == "clients":
+        xlsx = await loop.run_in_executor(thread_pool, _build_generic_excel, rows, _CLIENT_COLUMNS, "Clients")
+    elif type == "cve_instances":
+        xlsx = await loop.run_in_executor(thread_pool, _build_generic_excel, rows, _CVE_INSTANCE_COLUMNS, "CVE Instances")
+    else:
+        xlsx = await loop.run_in_executor(thread_pool, _build_excel, rows)
+
+    safe = re.sub(r'[^\w\-]', '_', value or type)
     fname = f"drilldown_{type}_{safe}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
     return Response(
         content=xlsx,

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Clock, Download } from 'lucide-react';
+import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Clock, Download, ShieldAlert, ShieldCheck, ShieldOff, Copy, CheckCheck } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { InfoTip } from './Tooltip';
@@ -195,6 +195,159 @@ const EstateSummaryPanel = ({ summary, tenantName }) => {
             Generated {formatDate(summary.generated_at)}
             {summary.previous_generated_at && ` · Previous: ${formatDate(summary.previous_generated_at)}`}
           </p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// CONFIG ANALYSIS SECTION (FBA)
+// ---------------------------------------------------------------------------
+const SEV_STYLE = {
+  CRITICAL: 'bg-red-900/30 text-red-400 border border-red-500/40',
+  HIGH:     'bg-orange-900/30 text-orange-400 border border-orange-500/40',
+  WARNING:  'bg-yellow-900/30 text-yellow-400 border border-yellow-500/40',
+  INFO:     'bg-blue-900/30 text-blue-400 border border-blue-500/40',
+};
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <button onClick={copy} className="ml-2 text-gray-600 hover:text-green-400 transition-colors flex-shrink-0" title="Copy to clipboard">
+      {copied ? <CheckCheck size={12} className="text-green-400" /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
+  const [fba, setFba]         = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(false);
+    fetch(`${apiBase}/api/device/${encodeURIComponent(deviceName)}/fba`)
+      .then(r => {
+        if (r.status === 404) return null;
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => setFba(data))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, [deviceName, apiBase]);
+
+  if (loading) {
+    return (
+      <div className="p-4 bg-gray-800 rounded-lg">
+        <h3 className="text-sm font-bold mb-2 text-cyan-400 flex items-center gap-2">
+          <Shield size={14} /> Config Analysis
+        </h3>
+        <div className="flex items-center gap-2 text-gray-500 text-xs">
+          <RefreshCw size={12} className="animate-spin" /> Loading config data…
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !fba) {
+    return (
+      <div className="p-4 bg-gray-800 rounded-lg">
+        <h3 className="text-sm font-bold mb-2 text-cyan-400 flex items-center gap-2">
+          <ShieldOff size={14} /> Config Analysis
+        </h3>
+        <p className="text-xs text-gray-600">
+          {error ? 'Could not load config data.' : 'No configuration data available for this device.'}
+        </p>
+      </div>
+    );
+  }
+
+  if (!fba.fba_analyzed) {
+    return (
+      <div className="p-4 bg-gray-800 rounded-lg">
+        <h3 className="text-sm font-bold mb-2 text-cyan-400 flex items-center gap-2">
+          <ShieldOff size={14} /> Config Analysis
+        </h3>
+        <p className="text-xs text-gray-600">No configuration profile found for this device in the FBA system.</p>
+      </div>
+    );
+  }
+
+  const findings = fba.fba_findings || [];
+  const isVuln   = fba.fba_vulnerable;
+
+  return (
+    <div className="p-4 bg-gray-800 rounded-lg space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
+          {isVuln ? <ShieldAlert size={14} className="text-red-400" /> : <ShieldCheck size={14} className="text-green-400" />}
+          Config Analysis
+          <InfoTip content="Live configuration analysis from the FBA (Firewall Baseline Analyzer) system. Results reflect the device's actual running config and may confirm or rule out CVE exploitability." position="left" size={10} />
+        </h3>
+        {fba.fba_scanned_at && (
+          <span className="text-[10px] text-gray-600">
+            Checked: {new Date(fba.fba_scanned_at).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      {/* Status banner */}
+      <div className={`flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold ${isVuln ? 'bg-red-900/20 border border-red-500/30 text-red-300' : 'bg-green-900/20 border border-green-500/30 text-green-300'}`}>
+        {isVuln ? <ShieldAlert size={13} /> : <ShieldCheck size={13} />}
+        {isVuln ? 'Configuration vulnerabilities detected' : 'No configuration vulnerabilities found'}
+      </div>
+
+      {/* Flag indicators */}
+      <div className="flex gap-2 flex-wrap">
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${fba.fba_vuln_acl ? 'bg-red-900/30 text-red-400 border-red-500/40' : 'bg-gray-900 text-gray-600 border-gray-700'}`}>
+          ACL {fba.fba_vuln_acl ? 'EXPOSED' : 'OK'}
+        </span>
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${fba.fba_vuln_password ? 'bg-orange-900/30 text-orange-400 border-orange-500/40' : 'bg-gray-900 text-gray-600 border-gray-700'}`}>
+          PASSWORD {fba.fba_vuln_password ? 'WEAK' : 'OK'}
+        </span>
+      </div>
+
+      {/* Reason */}
+      {fba.fba_reason && (
+        <p className="text-xs text-gray-400 leading-relaxed">{fba.fba_reason}</p>
+      )}
+
+      {/* Findings */}
+      {findings.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Findings ({findings.length})</p>
+          {findings.map((f, i) => (
+            <div key={i} className="bg-gray-900 rounded-lg p-3 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${SEV_STYLE[f.severity] || SEV_STYLE.INFO}`}>
+                  {f.severity}
+                </span>
+                <span className="text-[10px] text-gray-500 uppercase tracking-wider">{f.category}</span>
+              </div>
+              <p className="text-xs text-gray-300">{f.issue}</p>
+              {f.remediation_script && (
+                <div className="mt-1.5">
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-[10px] text-gray-600 uppercase tracking-wider">Remediation</span>
+                    <CopyButton text={f.remediation_script.replace(/\\n/g, '\n')} />
+                  </div>
+                  <pre className="text-[10px] text-green-400 font-mono bg-black/40 rounded p-2 overflow-x-auto whitespace-pre-wrap">
+                    {f.remediation_script.replace(/\\n/g, '\n')}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -664,7 +817,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
               <div className="p-4 bg-gray-800 rounded-lg">
                 <h3 className="text-lg font-bold mb-2 text-yellow-500 flex items-center gap-2">
                   AI Analysis
-                  <InfoTip content="LLM-generated security assessment for this specific device. Covers CVE impact in context, exploitation likelihood, recommended actions, and urgency. Generated by the vLLM inference endpoint using the device's OS, CVE list, and severity scores as input." position="left" size={11} />
+                  <InfoTip content="LLM-generated security assessment for this specific device. When FBA config data is available, the AI cross-references CVEs against the live device configuration to identify which vulnerabilities are actively exploitable." position="left" size={11} />
                 </h3>
                 {selectedDevice.llm_analysis === 'Scanning...' || selectedDevice.llm_analysis === 'Analyzing vulnerabilities...' ? (
                   <div className="flex items-center gap-2 text-gray-400 text-sm">
@@ -676,6 +829,11 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                   </ReactMarkdown>
                 )}
               </div>
+
+              <ConfigAnalysisSection
+                deviceName={selectedDevice.resource_name}
+                apiBase={apiBase}
+              />
             </div>
           </div>
         </div>

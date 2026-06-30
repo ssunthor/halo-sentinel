@@ -4,6 +4,7 @@ import {
   ChevronUp, ChevronDown, Search, X, AlertTriangle, Activity,
   Server, Layers, Bug, Cpu, Zap, Clock, CheckCircle2, DatabaseZap,
   BarChart3, ListTodo, History, ArrowUp, ArrowDown, ExternalLink,
+  ShieldAlert, ShieldCheck, ShieldOff,
 } from 'lucide-react';
 import { InfoTip } from './Tooltip';
 
@@ -88,6 +89,20 @@ function DeltaBadge({ delta, goodWhenDown = false, decimals = 0, suffix = '' }) 
       {isUp ? '+' : '-'}{abs}{suffix}
     </span>
   );
+}
+
+// ---------------------------------------------------------------------------
+// FBA status badge — shown in device table rows
+// ---------------------------------------------------------------------------
+function FbaBadge({ fbaAnalyzed, fbaVulnerable, fbaError }) {
+  if (!fbaAnalyzed && !fbaError) return null; // not yet checked
+  if (fbaError || !fbaAnalyzed) {
+    return <ShieldOff size={12} className="text-gray-700 flex-shrink-0" title="No config data available" />;
+  }
+  if (fbaVulnerable) {
+    return <ShieldAlert size={12} className="text-red-400 flex-shrink-0" title="Config vulnerabilities detected" />;
+  }
+  return <ShieldCheck size={12} className="text-green-500 flex-shrink-0" title="Config: no issues found" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +286,7 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-gray-950 z-10">
                 <tr className="border-b border-gray-800">
-                  {['Client','Device Name','Platform','Current FW','Recommended FW','CVE Score','CVEs','Serial','PON'].map(h => (
+                  {['Client','Device Name','Platform','Current FW','Recommended FW','CVE Score','CVEs','Config','Serial','PON'].map(h => (
                     <th key={h} className="text-left py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -292,6 +307,9 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
                       <td className="py-2 px-2 text-amber-400 font-mono">{d.recommended_version || '—'}</td>
                       <td className={`py-2 px-2 font-mono font-bold ${scoreColor(d.cve_score)}`}>{(d.cve_score || 0).toFixed(1)}</td>
                       <td className="py-2 px-2 text-gray-400 text-center">{d.cve_count || 0}</td>
+                      <td className="py-2 px-2 text-center">
+                        <FbaBadge fbaAnalyzed={d.fba_analyzed} fbaVulnerable={d.fba_vulnerable} fbaError={d.fba_error} />
+                      </td>
                       <td className="py-2 px-2 text-gray-500 font-mono">{d.serial || '—'}</td>
                       <td className="py-2 px-2 text-gray-500 font-mono">{d.pon || '—'}</td>
                     </tr>

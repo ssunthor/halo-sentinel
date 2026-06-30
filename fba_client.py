@@ -52,26 +52,21 @@ def _name_variants(name: str) -> list[str]:
     return variants
 
 
-async def fetch_configs_batch(
+async def fetch_configs_chunk(
     device_names: list[str],
     concurrency: int = 20,
-    progress_cb=None,
 ) -> dict[str, dict | None]:
     """
-    Fetch FBA config data for a list of device names.
+    Fetch FBA config data for a chunk of device names.
     Returns {device_name: data_dict | None} where None means no config found.
-    progress_cb(done, total) is called after each result if provided.
     """
     semaphore = asyncio.Semaphore(concurrency)
     results: dict[str, dict | None] = {}
-    total = len(device_names)
 
     async with httpx.AsyncClient() as client:
         tasks = [_fetch_one(client, name, semaphore) for name in device_names]
         for coro in asyncio.as_completed(tasks):
             name, data = await coro
             results[name] = data
-            if progress_cb:
-                progress_cb(len(results), total)
 
     return results

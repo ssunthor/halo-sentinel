@@ -2171,28 +2171,41 @@ async def fba_enrichment_worker():
             id_by_name    = {d["resource_name"]: d["id"] for d in stale}
             total         = len(device_names)
             done_count    = 0
+            found_count   = 0
+            CHUNK_SIZE    = 200
 
-            print(f"🔍 FBA: enriching {total} device(s) (concurrency={FBA_MAX_CONCURRENCY})")
+            print(f"🔍 FBA: enriching {total} device(s) in chunks of {CHUNK_SIZE} (concurrency={FBA_MAX_CONCURRENCY})")
 
             scanned_at = datetime.now(timezone.utc).isoformat()
-            results = await fba_client.fetch_configs_batch(
-                device_names,
-                concurrency=FBA_MAX_CONCURRENCY,
-            )
 
-            for name, data in results.items():
-                device_id = id_by_name.get(name)
-                if device_id is None:
-                    continue
-                await loop.run_in_executor(
-                    thread_pool, db.update_device_fba, device_id, data, scanned_at
-                )
-                done_count += 1
-                if done_count % 500 == 0:
-                    print(f"  FBA: {done_count}/{total} processed…")
+            for chunk_start in range(0, total, CHUNK_SIZE):
+                # Pause during global scan between chunks
+                if _global_scan_state.get("status") == "running":
+                    print("  FBA: pausing — global scan started")
+                    break
 
-            found = sum(1 for v in results.values() if v is not None)
-            print(f"✅ FBA: {total} processed — {found} configs found, {total - found} not available.")
+                chunk = device_names[chunk_start:chunk_start + CHUNK_SIZE]
+                chunk_results = await fba_client.fetch_configs_chunk(chunk, FBA_MAX_CONCURRENCY)
+
+                # Write this chunk's results immediately so they appear in the UI
+                for name, data in chunk_results.items():
+                    device_id = id_by_name.get(name)
+                    if device_id is None:
+                        continue
+                    await loop.run_in_executor(
+                        thread_pool, db.update_device_fba, device_id, data, scanned_at
+                    )
+                    done_count += 1
+                    if data is not None:
+                        found_count += 1
+
+                pct = round(100 * done_count / total)
+                print(f"  FBA: {done_count}/{total} ({pct}%) — {found_count} configs found so far")
+
+                # Brief yield between chunks to keep the event loop responsive
+                await asyncio.sleep(1)
+
+            print(f"✅ FBA: complete — {done_count} processed, {found_count} configs found, {done_count - found_count} not available.")
 
         except Exception as e:
             print(f"❌ FBA enrichment worker error: {e}")

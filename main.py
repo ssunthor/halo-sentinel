@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 import httpx
 from datetime import datetime, timedelta, timezone
 import email_report
+import fba_client
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 import redis
@@ -70,7 +71,10 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "password")
 
-DAILY_SCAN_TIME_UTC = os.getenv("DAILY_SCAN_TIME_UTC", "02:00")
+DAILY_SCAN_TIME_UTC  = os.getenv("DAILY_SCAN_TIME_UTC",  "02:00")
+FBA_ENABLED          = os.getenv("FBA_ENABLED", "true").lower() not in ("0", "false", "no")
+FBA_MAX_CONCURRENCY  = int(os.getenv("FBA_MAX_CONCURRENCY", "20"))
+FBA_CACHE_HOURS      = int(os.getenv("FBA_CACHE_HOURS", "24"))
 
 CACHE_DIR = "/app/cache"
 CVE_CACHE_FILE = os.path.join(CACHE_DIR, "cve_cache.json")
@@ -204,14 +208,38 @@ class VulnerabilityRequestBroker:
 # LLM HELPERS
 # ---------------------------------------------------------------------------
 
-async def get_llm_analysis(resource_name, model, os_info, cves):
+async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None):
     def call_llm():
         try:
             cve_list = "\n".join([f"- {c['id']}: {c['description']} (Score: {c['score']})" for c in cves])
+
+            fba_section = ""
+            if fba_data and fba_data.get("fba_analyzed"):
+                vuln_flag  = "VULNERABLE" if fba_data.get("fba_vulnerable") else "NOT VULNERABLE"
+                acl_flag   = "EXPOSED"    if fba_data.get("fba_vuln_acl")   else "OK"
+                pwd_flag   = "WEAK"       if fba_data.get("fba_vuln_password") else "OK"
+                reason     = fba_data.get("fba_reason") or ""
+                findings   = fba_data.get("fba_findings") or []
+                finding_lines = "\n".join(
+                    f"  [{f.get('severity','?')}] {f.get('category','')}: {f.get('issue','')}"
+                    for f in findings[:10]
+                )
+                fba_section = (
+                    f"\n\nLIVE CONFIGURATION ANALYSIS (from FBA config audit):\n"
+                    f"Overall status: {vuln_flag} | ACL exposure: {acl_flag} | Password security: {pwd_flag}\n"
+                    f"Summary: {reason}\n"
+                    f"Specific findings:\n{finding_lines}\n\n"
+                    f"Cross-reference the above NVD CVEs with the live configuration findings. "
+                    f"Identify which CVEs are likely ACTIVELY EXPLOITABLE given the device's current configuration "
+                    f"versus those that may be mitigated by the configuration. "
+                    f"Highlight any configuration issues that independently increase risk beyond the CVEs."
+                )
+
             prompt = (
                 f"Analyze the security risk for resource '{resource_name}' "
                 f"(Model: {model}, OS: {os_info}).\n\n"
-                f"The following vulnerabilities were found:\n{cve_list}\n\n"
+                f"The following vulnerabilities were found:\n{cve_list}"
+                f"{fba_section}\n\n"
                 f"Provide a concise assessment of the impact and recommended actions."
             )
             messages = [{"role": "user", "content": prompt}]
@@ -1155,12 +1183,16 @@ async def llm_analysis_worker():
                     else:
                         print(f"    🤖 [{tname}] analysing {dname} ({len(cves)} CVE(s), score {stub['highest_severity_score']:.1f})…")
                         t0 = time.time()
+                        fba_data = await loop.run_in_executor(
+                            thread_pool, db.get_device_fba_by_name, dname
+                        )
                         async with _llm_worker_sem:
                             analysis = await get_llm_analysis(
                                 dname,
                                 dev.get("resource_type", "Unknown"),
                                 dev.get("os", "Unknown"),
                                 cves,
+                                fba_data,
                             )
                         elapsed_ms = round((time.time() - t0) * 1000)
                         _ai_stats["total_api_calls"] += 1
@@ -2105,6 +2137,79 @@ async def daily_scan_scheduler():
         await asyncio.sleep(60)
 
 
+async def fba_enrichment_worker():
+    """
+    Background task: continuously enrich devices with FBA config-analysis data.
+    Fetches all devices whose FBA data is absent or stale (>FBA_CACHE_HOURS),
+    calls the FBA API in batches, and stores results in the DB.
+    Pauses while a global scan is running to avoid DB contention.
+    """
+    if not FBA_ENABLED:
+        print("ℹ️  FBA enrichment disabled (FBA_ENABLED=false).")
+        return
+
+    print("✅ FBA enrichment worker started.")
+    await asyncio.sleep(30)  # let startup settle
+
+    while True:
+        try:
+            # Pause during active global scan
+            if _global_scan_state.get("status") == "running":
+                await asyncio.sleep(30)
+                continue
+
+            loop = asyncio.get_running_loop()
+            stale = await loop.run_in_executor(
+                thread_pool, db.get_devices_needing_fba_refresh, FBA_CACHE_HOURS
+            )
+
+            if not stale:
+                await asyncio.sleep(300)  # nothing to do — check again in 5m
+                continue
+
+            device_names  = [d["resource_name"] for d in stale]
+            id_by_name    = {d["resource_name"]: d["id"] for d in stale}
+            total         = len(device_names)
+            done_count    = 0
+
+            print(f"🔍 FBA: enriching {total} device(s) (concurrency={FBA_MAX_CONCURRENCY})")
+
+            scanned_at = datetime.now(timezone.utc).isoformat()
+            results = await fba_client.fetch_configs_batch(
+                device_names,
+                concurrency=FBA_MAX_CONCURRENCY,
+            )
+
+            for name, data in results.items():
+                device_id = id_by_name.get(name)
+                if device_id is None:
+                    continue
+                await loop.run_in_executor(
+                    thread_pool, db.update_device_fba, device_id, data, scanned_at
+                )
+                done_count += 1
+                if done_count % 500 == 0:
+                    print(f"  FBA: {done_count}/{total} processed…")
+
+            found = sum(1 for v in results.values() if v is not None)
+            print(f"✅ FBA: {total} processed — {found} configs found, {total - found} not available.")
+
+        except Exception as e:
+            print(f"❌ FBA enrichment worker error: {e}")
+
+        await asyncio.sleep(60)  # brief pause before checking for more stale devices
+
+
+@app.get("/api/device/{resource_name}/fba")
+async def get_device_fba(resource_name: str):
+    """Return stored FBA config-analysis data for a device by name."""
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(thread_pool, db.get_device_fba_by_name, resource_name)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Device not found.")
+    return data
+
+
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Defense Halo Customer CVE Analyzer starting...")
@@ -2126,6 +2231,7 @@ async def startup_event():
     asyncio.create_task(notification_scheduler())
     print("✅ Notification scheduler started.")
     asyncio.create_task(daily_scan_scheduler())
+    asyncio.create_task(fba_enrichment_worker())
     print("✅ Ready.")
 
 

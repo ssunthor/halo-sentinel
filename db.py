@@ -135,6 +135,15 @@ def init_db():
             ("recommended_version", "TEXT"),
             ("serial",              "TEXT"),
             ("pon",                 "TEXT"),
+            # FBA config-analysis columns
+            ("fba_scanned_at",      "TEXT"),
+            ("fba_analyzed",        "INTEGER"),
+            ("fba_vulnerable",      "INTEGER"),
+            ("fba_vuln_acl",        "INTEGER"),
+            ("fba_vuln_password",   "INTEGER"),
+            ("fba_reason",          "TEXT"),
+            ("fba_findings",        "TEXT"),
+            ("fba_error",           "INTEGER"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {typedef}")
@@ -487,6 +496,84 @@ def get_severity_breakdown() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# FBA (Firewall Baseline Analysis) helpers
+# ---------------------------------------------------------------------------
+
+def get_devices_needing_fba_refresh(max_age_hours: int = 24) -> list[dict]:
+    """Return all devices whose FBA data is absent or older than max_age_hours."""
+    rows = _connect().execute("""
+        SELECT d.id, d.resource_name, t.name AS tenant_name
+        FROM devices d
+        JOIN tenants t ON d.tenant_id = t.tenant_id
+        WHERE d.fba_scanned_at IS NULL
+           OR datetime(d.fba_scanned_at) < datetime('now', ? || ' hours')
+        ORDER BY d.resource_name ASC
+    """, (f"-{max_age_hours}",)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> None:
+    """
+    Persist FBA result for a device.
+    data=None means no config was found (fba_error=1, fba_analyzed=0).
+    """
+    import json as _json
+    with _write_lock:
+        if data is None:
+            _connect().execute("""
+                UPDATE devices
+                SET fba_scanned_at=?, fba_analyzed=0, fba_vulnerable=NULL,
+                    fba_vuln_acl=NULL, fba_vuln_password=NULL,
+                    fba_reason=NULL, fba_findings=NULL, fba_error=1
+                WHERE id=?
+            """, (scanned_at, device_id))
+        else:
+            findings_json = _json.dumps(data.get("findings") or [])
+            _connect().execute("""
+                UPDATE devices
+                SET fba_scanned_at=?,
+                    fba_analyzed=?,
+                    fba_vulnerable=?,
+                    fba_vuln_acl=?,
+                    fba_vuln_password=?,
+                    fba_reason=?,
+                    fba_findings=?,
+                    fba_error=0
+                WHERE id=?
+            """, (
+                scanned_at,
+                1 if data.get("analyzed") else 0,
+                1 if data.get("vulnerable") else 0,
+                1 if data.get("vuln_acl") else 0,
+                1 if data.get("vuln_password") else 0,
+                data.get("reason"),
+                findings_json,
+                device_id,
+            ))
+        _connect().commit()
+
+
+def get_device_fba_by_name(resource_name: str) -> dict | None:
+    """Return stored FBA data for a device by its resource_name."""
+    import json as _json
+    row = _connect().execute("""
+        SELECT fba_scanned_at, fba_analyzed, fba_vulnerable, fba_vuln_acl,
+               fba_vuln_password, fba_reason, fba_findings, fba_error
+        FROM devices WHERE resource_name = ?
+        LIMIT 1
+    """, (resource_name,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("fba_findings"):
+        try:
+            d["fba_findings"] = _json.loads(d["fba_findings"])
+        except Exception:
+            d["fba_findings"] = []
+    return d
+
+
+# ---------------------------------------------------------------------------
 # Drilldown queries (device lists for dashboard widget click-through)
 # ---------------------------------------------------------------------------
 
@@ -501,6 +588,9 @@ _DRILLDOWN_COLS = """
     d.serial,
     d.highest_severity_score    AS cve_score,
     d.resource_category,
+    d.fba_vulnerable,
+    d.fba_error,
+    d.fba_analyzed,
     (SELECT COUNT(*) FROM cves c2 WHERE c2.device_id = d.id) AS cve_count
 """
 

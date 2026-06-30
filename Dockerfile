@@ -10,6 +10,7 @@ COPY llm_interface.py .
 COPY db.py .
 COPY email_report.py .
 COPY changelog.json .
+COPY fba_client.py .
 
 ENV PYTHONUNBUFFERED=1
 

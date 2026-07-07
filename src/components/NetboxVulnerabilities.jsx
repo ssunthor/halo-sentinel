@@ -328,11 +328,14 @@ const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
           <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Findings ({findings.length})</p>
           {findings.map((f, i) => (
             <div key={i} className="bg-gray-900 rounded-lg p-3 space-y-1.5">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${SEV_STYLE[f.severity] || SEV_STYLE.INFO}`}>
                   {f.severity}
                 </span>
                 <span className="text-[10px] text-gray-500 uppercase tracking-wider">{f.category}</span>
+                {f.node && (
+                  <span className="text-[10px] text-blue-400 font-mono bg-blue-900/30 px-1.5 py-0.5 rounded">{f.node}</span>
+                )}
               </div>
               <p className="text-xs text-gray-300">{f.issue}</p>
               {f.remediation_script && (

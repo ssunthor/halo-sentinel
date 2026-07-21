@@ -130,20 +130,22 @@ def init_db():
         # Migrate existing tables: add new columns if absent
         existing = {row[1] for row in conn.execute("PRAGMA table_info(devices)")}
         for col, typedef in [
-            ("platform_name",       "TEXT"),
-            ("os_version",          "TEXT"),
-            ("recommended_version", "TEXT"),
-            ("serial",              "TEXT"),
-            ("pon",                 "TEXT"),
+            ("platform_name",            "TEXT"),
+            ("os_version",               "TEXT"),
+            ("recommended_version",      "TEXT"),
+            ("serial",                   "TEXT"),
+            ("pon",                      "TEXT"),
+            # GIA engineering-recommended version
+            ("gia_recommended_version",  "TEXT"),
             # FBA config-analysis columns
-            ("fba_scanned_at",      "TEXT"),
-            ("fba_analyzed",        "INTEGER"),
-            ("fba_vulnerable",      "INTEGER"),
-            ("fba_vuln_acl",        "INTEGER"),
-            ("fba_vuln_password",   "INTEGER"),
-            ("fba_reason",          "TEXT"),
-            ("fba_findings",        "TEXT"),
-            ("fba_error",           "INTEGER"),
+            ("fba_scanned_at",           "TEXT"),
+            ("fba_analyzed",             "INTEGER"),
+            ("fba_vulnerable",           "INTEGER"),
+            ("fba_vuln_acl",             "INTEGER"),
+            ("fba_vuln_password",        "INTEGER"),
+            ("fba_reason",               "TEXT"),
+            ("fba_findings",             "TEXT"),
+            ("fba_error",                "INTEGER"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {typedef}")
@@ -231,9 +233,10 @@ def save_tenant_results(tenant_id: str, data: dict):
                 cur = conn.execute("""
                     INSERT INTO devices
                         (tenant_id, resource_name, resource_category, resource_type,
-                         os, platform_name, os_version, recommended_version, serial, pon,
+                         os, platform_name, os_version, recommended_version,
+                         gia_recommended_version, serial, pon,
                          highest_severity_score, is_vulnerable, llm_analysis, scanned_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     tenant_id,
                     dev.get("resource_name"),
@@ -243,6 +246,7 @@ def save_tenant_results(tenant_id: str, data: dict):
                     dev.get("platform_name"),
                     dev.get("os_version"),
                     dev.get("recommended_version"),
+                    dev.get("gia_recommended_version"),
                     dev.get("serial"),
                     dev.get("pon"),
                     dev.get("highest_severity_score", 0.0),
@@ -299,6 +303,7 @@ def load_tenant_results(tenant_id: str) -> dict:
                 "platform_name": dev["platform_name"],
                 "os_version": dev["os_version"],
                 "recommended_version": dev["recommended_version"],
+                "gia_recommended_version": dev["gia_recommended_version"],
                 "serial": dev["serial"],
                 "pon": dev["pon"],
                 "highest_severity_score": dev["highest_severity_score"],
@@ -585,6 +590,7 @@ _DRILLDOWN_COLS = """
     d.resource_type             AS device_type,
     d.os_version                AS current_firmware,
     d.recommended_version,
+    d.gia_recommended_version,
     d.serial,
     d.highest_severity_score    AS cve_score,
     d.resource_category,
@@ -856,6 +862,7 @@ def get_export_rows(
             d.resource_type             AS device_type,
             d.os_version                AS current_firmware,
             d.recommended_version,
+            d.gia_recommended_version,
             d.serial,
             d.highest_severity_score    AS cve_score,
             d.resource_category,

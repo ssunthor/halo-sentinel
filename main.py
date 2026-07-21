@@ -15,6 +15,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 import email_report
 import fba_client
+import gia_client
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 import redis
@@ -508,6 +509,14 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
     print(f"      📊 {resource_name}: {len(final_cves_data.get('vulnerabilities', []))} raw CVEs for '{current_search_query}'")
 
+    # GIA engineering version lookup (cached per platform — one API call shared
+    # across all devices on the same platform within the same scan cycle).
+    gia_data = None
+    try:
+        gia_data = await gia_client.lookup_platform_version(os_name)
+    except Exception as gia_err:
+        print(f"      ⚠️ GIA lookup failed for '{os_name}': {gia_err}")
+
     try:
         device_cves, highest = _parse_cve_response(final_cves_data)
         recommended_version = _extract_recommended_version(final_cves_data)
@@ -520,6 +529,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "platform_name": os_name,
             "os_version": os_version,
             "recommended_version": recommended_version,
+            "gia_recommended_version": (gia_data or {}).get("gia_recommended_version"),
             "serial": serial,
             "pon": pon,
             "highest_severity_score": highest,
@@ -557,6 +567,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "platform_name": os_name,
             "os_version": os_version,
             "recommended_version": None,
+            "gia_recommended_version": (gia_data or {}).get("gia_recommended_version"),
             "serial": serial,
             "pon": pon,
             "highest_severity_score": 0.0,

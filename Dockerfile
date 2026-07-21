@@ -11,6 +11,7 @@ COPY db.py .
 COPY email_report.py .
 COPY changelog.json .
 COPY fba_client.py .
+COPY gia_client.py .
 
 ENV PYTHONUNBUFFERED=1
 

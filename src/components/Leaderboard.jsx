@@ -254,7 +254,7 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-gray-950 z-10">
                 <tr className="border-b border-gray-800">
-                  {['Client','Device','Platform','Firmware','CVE ID','Score','Severity','Description'].map(h => (
+                  {['Client','Device','Platform','Current FW','NVD Min Fix','Eng Rec','CVE ID','Score','Severity','Description'].map(h => (
                     <th key={h} className="text-left py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -266,6 +266,8 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
                     <td className="py-2 px-2 text-gray-300 truncate max-w-[150px]" title={c.resource_name}>{c.resource_name || '—'}</td>
                     <td className="py-2 px-2 text-gray-400 whitespace-nowrap">{c.platform_name || '—'}</td>
                     <td className="py-2 px-2 text-gray-400 font-mono">{c.current_firmware || '—'}</td>
+                    <td className="py-2 px-2 text-amber-400 font-mono">{c.recommended_version || '—'}</td>
+                    <td className="py-2 px-2 text-blue-400 font-mono">{c.gia_recommended_version || '—'}</td>
                     <td className="py-2 px-2">
                       <a href={`https://nvd.nist.gov/vuln/detail/${c.cve_id}`} target="_blank" rel="noopener noreferrer"
                         className="text-blue-400 hover:underline font-mono font-bold" onClick={e => e.stopPropagation()}>
@@ -286,7 +288,7 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-gray-950 z-10">
                 <tr className="border-b border-gray-800">
-                  {['Client','Device Name','Platform','Current FW','Recommended FW','CVE Score','CVEs','Config','Serial','PON'].map(h => (
+                  {['Client','Device Name','Platform','Current FW','NVD Min Fix','Eng Rec','CVE Score','CVEs','Config','Serial','PON'].map(h => (
                     <th key={h} className="text-left py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -305,6 +307,7 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
                       <td className="py-2 px-2 text-gray-400 whitespace-nowrap">{d.platform_name || '—'}</td>
                       <td className="py-2 px-2 text-gray-400 font-mono">{d.current_firmware || d.os_version || '—'}</td>
                       <td className="py-2 px-2 text-amber-400 font-mono">{d.recommended_version || '—'}</td>
+                      <td className="py-2 px-2 text-blue-400 font-mono">{d.gia_recommended_version || '—'}</td>
                       <td className={`py-2 px-2 font-mono font-bold ${scoreColor(d.cve_score)}`}>{(d.cve_score || 0).toFixed(1)}</td>
                       <td className="py-2 px-2 text-gray-400 text-center">{d.cve_count || 0}</td>
                       <td className="py-2 px-2 text-center">

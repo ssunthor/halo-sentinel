@@ -714,14 +714,14 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                 </div>
                 <div className="flex-shrink-0 w-48 min-w-0 hidden md:flex flex-col items-end gap-0.5">
                   <span className="text-xs text-green-500/70 truncate max-w-full" title={device.os}>{device.os}</span>
-                  {device.gia_recommended_version && (
-                    <span className="text-[10px] text-blue-400/80 font-mono truncate max-w-full" title={`Engineering Recommended: ${device.gia_recommended_version}`}>
-                      ★ {device.gia_recommended_version}
+                  {device.recommended_version && (
+                    <span className="text-[10px] text-amber-400/80 font-mono truncate max-w-full" title={`NVD Min Fix: ${device.recommended_version}`}>
+                      NVD → {device.recommended_version}
                     </span>
                   )}
-                  {device.recommended_version && !device.gia_recommended_version && (
-                    <span className="text-[10px] text-amber-400/80 font-mono truncate max-w-full" title={`NVD Recommended: ${device.recommended_version}`}>
-                      → {device.recommended_version}
+                  {device.gia_recommended_version && (
+                    <span className="text-[10px] text-blue-400/80 font-mono truncate max-w-full" title={`Engineering Recommended: ${device.gia_recommended_version}`}>
+                      Eng ★ {device.gia_recommended_version}
                     </span>
                   )}
                 </div>

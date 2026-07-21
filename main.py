@@ -959,6 +959,28 @@ async def run_global_scan():
             tenant_names: dict[str, str] = {}
             scan_ts = datetime.utcnow().isoformat()
 
+            # ----------------------------------------------------------------
+            # Phase 3b — GIA engineering version lookup (one per platform)
+            # ----------------------------------------------------------------
+            state["phase"] = f"Looking up engineering versions via GIA ({len(platform_names)} platforms)"
+            await _push_global({"type": "progress", "state": dict(state)})
+
+            gia_version_map: dict[str, str | None] = {}
+            if platform_names:
+                gia_tasks = {p: gia_client.lookup_platform_version(p) for p in platform_names}
+                gia_results = await asyncio.gather(*gia_tasks.values(), return_exceptions=True)
+                for pname, result in zip(gia_tasks.keys(), gia_results):
+                    if isinstance(result, Exception):
+                        print(f"  [GIA] lookup error for {pname!r}: {result}", flush=True)
+                        gia_version_map[pname] = None
+                    else:
+                        gia_version_map[pname] = (result or {}).get("gia_recommended_version")
+                found = sum(1 for v in gia_version_map.values() if v)
+                print(f"  [GIA] {found}/{len(platform_names)} platforms matched a version", flush=True)
+
+            state["phase_timings"]["gia_seconds"] = round(time.time() - phase_t, 1)
+            phase_t = time.time()
+
             def _make_record(d: dict, device_cves: list, highest: float,
                              recommended_version: str | None = None) -> dict:
                 rtype = d.get("_rtype", "device")
@@ -983,6 +1005,7 @@ async def run_global_scan():
                     "platform_name": os_name,
                     "os_version": os_version,
                     "recommended_version": recommended_version,
+                    "gia_recommended_version": gia_version_map.get(os_name) if os_name else None,
                     "serial": serial,
                     "pon": pon,
                     "highest_severity_score": highest,

@@ -1644,8 +1644,8 @@ def _write_cve_data_sheet(ws, rows: list):
     from openpyxl.styles import Font, PatternFill, Alignment
     headers = [
         "Client Name", "Device Name", "PON", "Platform", "Device Type",
-        "Current Firmware", "Recommended Firmware", "Serial Number",
-        "Device CVE Score", "Number of Vulnerabilities",
+        "Current Firmware", "NVD Min-Fix Version", "Eng Recommended Version",
+        "Serial Number", "Device CVE Score", "Number of Vulnerabilities",
     ]
     hdr_fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
     hdr_font = Font(color="FFFFFF", bold=True)
@@ -1655,18 +1655,24 @@ def _write_cve_data_sheet(ws, rows: list):
         cell.fill = hdr_fill
         cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 20
+    # Highlight the engineering recommended column header in a distinct colour
+    eng_hdr = ws.cell(row=1, column=8)
+    eng_hdr.fill = PatternFill(start_color="1A3A5C", end_color="1A3A5C", fill_type="solid")
     for i, row in enumerate(rows, 2):
-        ws.cell(row=i, column=1, value=_xlsx_str(row.get("tenant_name")))
-        ws.cell(row=i, column=2, value=_xlsx_str(row.get("resource_name")))
-        ws.cell(row=i, column=3, value=_xlsx_str(row.get("pon")))
-        ws.cell(row=i, column=4, value=_xlsx_str(row.get("platform_name")))
-        ws.cell(row=i, column=5, value=_xlsx_str(row.get("device_type")))
-        ws.cell(row=i, column=6, value=_xlsx_str(row.get("current_firmware")))
-        ws.cell(row=i, column=7, value=_xlsx_str(row.get("recommended_version")))
-        ws.cell(row=i, column=8, value=_xlsx_str(row.get("serial")))
+        ws.cell(row=i, column=1,  value=_xlsx_str(row.get("tenant_name")))
+        ws.cell(row=i, column=2,  value=_xlsx_str(row.get("resource_name")))
+        ws.cell(row=i, column=3,  value=_xlsx_str(row.get("pon")))
+        ws.cell(row=i, column=4,  value=_xlsx_str(row.get("platform_name")))
+        ws.cell(row=i, column=5,  value=_xlsx_str(row.get("device_type")))
+        ws.cell(row=i, column=6,  value=_xlsx_str(row.get("current_firmware")))
+        ws.cell(row=i, column=7,  value=_xlsx_str(row.get("recommended_version")))
+        gia_cell = ws.cell(row=i, column=8, value=_xlsx_str(row.get("gia_recommended_version")))
+        if row.get("gia_recommended_version"):
+            gia_cell.font = Font(color="5B9BD5", bold=True)
+        ws.cell(row=i, column=9,  value=_xlsx_str(row.get("serial")))
         score = round(row.get("cve_score") or 0.0, 1)
-        sc = ws.cell(row=i, column=9, value=score)
-        ws.cell(row=i, column=10, value=row.get("cve_count", 0))
+        sc = ws.cell(row=i, column=10, value=score)
+        ws.cell(row=i, column=11, value=row.get("cve_count", 0))
         if score >= 9.0:
             sc.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
             sc.font = Font(color="FFFFFF", bold=True)
@@ -1675,7 +1681,7 @@ def _write_cve_data_sheet(ws, rows: list):
             sc.font = Font(color="FFFFFF")
         elif score >= 4.0:
             sc.fill = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")
-    for col, width in enumerate([20, 30, 15, 20, 25, 20, 22, 20, 18, 22], 1):
+    for col, width in enumerate([20, 30, 15, 20, 25, 20, 22, 24, 20, 18, 22], 1):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
     ws.freeze_panes = "A2"
 

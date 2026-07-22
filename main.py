@@ -966,6 +966,7 @@ async def run_global_scan():
             await _push_global({"type": "progress", "state": dict(state)})
 
             gia_version_map: dict[str, str | None] = {}
+            print(f"  [GIA] starting lookups for {len(platform_names)} platform(s): {sorted(platform_names)[:5]}", flush=True)
             if platform_names:
                 gia_tasks = {p: gia_client.lookup_platform_version(p) for p in platform_names}
                 gia_results = await asyncio.gather(*gia_tasks.values(), return_exceptions=True)

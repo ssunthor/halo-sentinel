@@ -145,7 +145,7 @@ async def _search_and_resolve(client: httpx.AsyncClient, platform: str) -> dict 
             return None
         body = resp.json()
     except Exception as e:
-        print(f"  [GIA] search request failed for {platform!r}: {e}", flush=True)
+        print(f"  [GIA] search request failed for {platform!r}: {type(e).__name__}: {e!r}", flush=True)
         return None
 
     # Log the top-level shape so we can see what the API actually returns
@@ -258,7 +258,7 @@ async def lookup_platform_version(platform_name: str) -> dict | None:
                 return cached_result
 
     print(f"  [GIA] looking up {platform_name!r} (key={key!r}, api_key={'set' if GIA_API_KEY else 'NOT SET'})", flush=True)
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False, follow_redirects=True) as client:
         result = await _search_and_resolve(client, platform_name)
 
     if result:

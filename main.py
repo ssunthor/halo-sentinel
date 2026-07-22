@@ -977,7 +977,20 @@ async def run_global_scan():
                     else:
                         gia_version_map[pname] = (result or {}).get("gia_recommended_version")
                 found = sum(1 for v in gia_version_map.values() if v)
-                print(f"  [GIA] {found}/{len(platform_names)} platforms matched a version", flush=True)
+                # Print a consolidated summary block — easy to find even if earlier per-lookup
+                # lines have scrolled out of the buffer.
+                hits   = sorted(p for p, v in gia_version_map.items() if v)
+                misses = sorted(p for p, v in gia_version_map.items() if not v)
+                print(
+                    f"\n{'='*60}\n"
+                    f"  [GIA] SCAN COMPLETE — {found}/{len(platform_names)} platforms matched\n"
+                    f"  Check /api/gia/status for full cache contents\n"
+                    f"  MATCHED ({len(hits)}): {', '.join(hits) or 'none'}\n"
+                    f"  NO MATCH ({len(misses)}): {', '.join(misses[:20])}"
+                    f"{'...' if len(misses) > 20 else ''}\n"
+                    f"{'='*60}\n",
+                    flush=True,
+                )
 
             state["phase_timings"]["gia_seconds"] = round(time.time() - phase_t, 1)
             phase_t = time.time()
@@ -1993,6 +2006,35 @@ async def get_changelog():
 @app.get("/status")
 async def get_status():
     return {"service": "Defense Halo Customer CVE Analyzer", "status": "ok"}
+
+
+@app.get("/api/gia/status")
+async def gia_status():
+    """Dump the GIA version cache — readable any time after a scan completes."""
+    import gia_client as _gia
+    import time as _time
+    cache = _gia._cache
+    now = _time.monotonic()
+    rows = []
+    for key, (result, cached_at) in sorted(cache.items()):
+        age_s = int(now - cached_at)
+        rows.append({
+            "platform_key": key,
+            "gia_recommended_version": (result or {}).get("gia_recommended_version"),
+            "gia_component": (result or {}).get("gia_component"),
+            "matched": result is not None and bool((result or {}).get("gia_recommended_version")),
+            "age_seconds": age_s,
+        })
+    matched = sum(1 for r in rows if r["matched"])
+    return {
+        "total_cached": len(rows),
+        "matched": matched,
+        "no_match": len(rows) - matched,
+        "cache_ttl_hours": _gia.GIA_CACHE_TTL_S / 3600,
+        "api_key_set": bool(_gia.GIA_API_KEY),
+        "base_url": _gia.GIA_BASE_URL,
+        "entries": rows,
+    }
 
 
 # ---------------------------------------------------------------------------

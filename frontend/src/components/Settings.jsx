@@ -7,7 +7,7 @@ import {
 import TagInput from './TagInput';
 import RichEditor from './RichEditor';
 
-const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
+const apiBase = window._env_?.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5174';
 
 // ---------------------------------------------------------------------------
 // Helpers

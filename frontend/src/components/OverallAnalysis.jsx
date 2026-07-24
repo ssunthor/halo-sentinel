@@ -13,7 +13,7 @@ const OverallAnalysis = () => {
     useEffect(() => {
         const fetchAnalysis = async () => {
             try {
-                const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://10.250.133.153:15174';
+                const apiBase = window._env_?.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? 'http://10.250.133.153:15174';
                 const response = await fetch(`${apiBase}/overall-analysis`);
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);

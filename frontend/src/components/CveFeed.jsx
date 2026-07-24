@@ -11,7 +11,7 @@ const CveFeed = () => {
       setLoading(true);
       setError(null);
       try {
-        const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://10.250.133.153:15174';
+        const apiBase = window._env_?.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? 'http://10.250.133.153:15174';
         const proxyUrl = `${apiBase}/cve-proxy`;
         const response = await fetch(proxyUrl);
         if (!response.ok) {

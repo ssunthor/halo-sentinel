@@ -14,7 +14,7 @@ const RssFeed = ({ feeds, onRemoveFeed }) => {
 
       for (const feed of feeds) {
         try {
-          const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://10.250.133.153:15174';
+          const apiBase = window._env_?.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? 'http://10.250.133.153:15174';
           const proxyUrl = `${apiBase}/rss-proxy?url=${encodeURIComponent(feed.url)}`;
           const response = await fetch(proxyUrl);
           if (!response.ok) {

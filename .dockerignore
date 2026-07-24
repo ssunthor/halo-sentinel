@@ -1,0 +1,11 @@
+**/.git
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+# GeoLite mmdb files are vestigial (no geoip code path) — keep them out of the image
+backend/*.mmdb
+# local runtime cache / db (persisted via the /app/cache volume instead)
+backend/cache

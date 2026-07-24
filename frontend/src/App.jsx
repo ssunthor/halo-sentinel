@@ -7,7 +7,7 @@ import SettingsPage from './components/Settings';
 import UserGuide from './components/UserGuide';
 import { InfoTip } from './components/Tooltip';
 
-const apiBase = window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5174';
+const apiBase = window._env_?.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5174';
 
 
 const formatAge = (isoDate) => {

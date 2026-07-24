@@ -8,8 +8,10 @@ include:
 variables:
   CONTAINER_BUILD_NAME: $CI_PROJECT_NAME
   PLATFORM: "linux/amd64"
-  CI_APPLICATION_REPOSITORY: $CI_REGISTRY_IMAGE
-  CI_APPLICATION_TAG: $CI_COMMIT_REF_SLUG
+  # NOTE: do not override CI_APPLICATION_REPOSITORY / CI_APPLICATION_TAG here.
+  # The template owns them for its temp-image flow (build -> $CI_REGISTRY_IMAGE/tmp:$CI_PIPELINE_ID,
+  # then scan/dive/annotate that temp image, then deploy copies it to $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG).
+  # Overriding them made the build skip the temp image and broke update_annotations.
   KANIKO_CLI_ARGS: "--skip-tls-verify"
   PMD_CPD_DIR: "src"
   # DEPLOYMENT: "deployment/csa-frontend"

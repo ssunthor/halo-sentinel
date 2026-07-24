@@ -1,0 +1,6 @@
+---
+ignored:
+  # Pinning apt package versions is impractical on the rolling Debian slim base;
+  # we pin the base image by digest instead (reproducibility) and let apt track
+  # the distro's security updates.
+  - DL3008

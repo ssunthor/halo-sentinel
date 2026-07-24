@@ -103,6 +103,7 @@ The SQLite database lives at `/app/cache/cve_analyzer.db` (configured via `CACHE
 ### Tables
 
 #### `tenants`
+
 | Column | Type | Description |
 |---|---|---|
 | `tenant_id` | TEXT PK | NetBox tenant ID |
@@ -114,6 +115,7 @@ The SQLite database lives at `/app/cache/cve_analyzer.db` (configured via `CACHE
 | `max_score` | REAL | Highest CVSS base score across all devices |
 
 #### `devices`
+
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
@@ -132,6 +134,7 @@ The SQLite database lives at `/app/cache/cve_analyzer.db` (configured via `CACHE
 | `scanned_at` | TEXT | ISO-8601 scan timestamp |
 
 #### `cves`
+
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
@@ -142,6 +145,7 @@ The SQLite database lives at `/app/cache/cve_analyzer.db` (configured via `CACHE
 | `description` | TEXT | English description from NVD |
 
 #### `summaries`
+
 | Column | Type | Description |
 |---|---|---|
 | `tenant_id` | TEXT PK | References `tenants` |
@@ -160,6 +164,7 @@ The SQLite database lives at `/app/cache/cve_analyzer.db` (configured via `CACHE
 ### Startup migration
 
 At startup, `db.init_db()` runs:
+
 1. `CREATE TABLE IF NOT EXISTS` for all four tables (safe for existing databases)
 2. `ALTER TABLE devices ADD COLUMN` for any columns added after initial deployment (currently `platform_name`, `os_version`, `serial`, `pon`) — columns already present are silently skipped
 3. A best-effort `UPDATE` to back-fill `platform_name` from the existing `os` field for pre-migration rows
@@ -203,9 +208,11 @@ The global scan is designed to process the entire estate (140,000+ devices acros
 **Flow:**
 
 #### Phase 1 — Device inventory
+
 Fetch all devices and VMs across the entire NetBox instance without a tenant filter (`/api/dcim/devices/?limit=1000`, `/api/virtualization/virtual-machines/?limit=1000`). Pagination is followed automatically. Progress (`devices_fetched`, `physical_devices`, `virtual_machines`) is broadcast live via SSE.
 
 #### Phase 2 — Platform deduplication
+
 Build a `combo_map`: a dict mapping each unique `(NVD query string)` → `[list of raw NetBox device dicts]`.
 
 - Devices with no platform or no OS version are collected separately in `no_platform` and written as score-0 records
@@ -213,9 +220,11 @@ Build a `combo_map`: a dict mapping each unique `(NVD query string)` → `[list 
 - Result: `unique_combos` (typically 200–2,000 distinct queries) vs `total_devices` (potentially 100,000+)
 
 #### Phase 3 — NVD queries
+
 All `combo_map` keys are submitted concurrently to `VulnerabilityRequestBroker` via `asyncio.gather()`. The broker's single worker serialises actual API calls with a 10-second sleep between each; cache hits are returned instantly. Progress (`nvd_queried`, `nvd_cached`) is broadcast live.
 
 #### Phase 4 — Fan-out and save
+
 CVE results are fanned back out to all matching devices, grouped by tenant, then saved to SQLite via `db.save_tenant_results()` for each tenant. The `bulk_scan` flag is set on each tenant row to indicate that per-device LLM analysis was deferred.
 
 **Note:** The global scan intentionally skips per-device LLM analysis (which would require 100,000+ sequential API calls). The [Background Back-Fill Worker](#background-back-fill-worker) handles this asynchronously after the scan completes.
@@ -243,6 +252,7 @@ CVE results are fanned back out to all matching devices, grouped by tenant, then
 **Function:** `get_llm_analysis(resource_name, model, os_info, cves)`
 
 For each vulnerable device, a prompt is constructed that includes:
+
 - Device name, model, and OS string
 - Full list of CVEs with IDs, descriptions, and CVSS scores
 
@@ -264,6 +274,7 @@ After a per-tenant scan completes (or after the back-fill worker finishes device
 - If a previous summary exists: its `vulnerable_device_count` and `max_severity_score` for trend comparison
 
 The LLM responds in **JSON mode** with the following schema:
+
 ```json
 {
   "risk_posture": "Critical | High | Medium | Low | Clean",
@@ -286,6 +297,7 @@ The result is saved to the `summaries` table and immediately returned to the fro
 The global scan skips LLM calls for practicality. This worker continuously monitors the database for tenants and devices that still need analysis and fills them in asynchronously without overwhelming the vLLM endpoint.
 
 **Rate limiting:**
+
 | Control | Value | Effect |
 |---|---|---|
 | `asyncio.Semaphore(2)` | 2 concurrent calls | Caps in-flight LLM requests from the worker |
@@ -295,6 +307,7 @@ The global scan skips LLM calls for practicality. This worker continuously monit
 | `_LLM_WORKER_ERROR_DELAY` | 30 seconds | Sleep after an unexpected exception |
 
 **Per-iteration logic:**
+
 1. Query `db.get_tenants_needing_analysis(limit=20)` — returns tenants with no estate summary or with vulnerable devices whose `llm_analysis` is still a placeholder string from the bulk scan. Ordered by `vulnerable_devices DESC` so the most exposed clients are prioritised.
 2. For each tenant, skip if an active per-tenant scan or global scan is running (to avoid write conflicts).
 3. Load the full device list once (`db.load_tenant_results()`).
@@ -302,6 +315,7 @@ The global scan skips LLM calls for practicality. This worker continuously monit
 5. After all devices are processed, call `generate_estate_summary()`.
 
 **Metrics** are tracked live in `_ai_stats` and exposed via `GET /api/ai/stats`:
+
 - Status (starting / idle / analyzing / error)
 - Current tenant and device name
 - Pending queue depth (tenants + devices)

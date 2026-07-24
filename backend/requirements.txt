@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+httpx
+redis>=5.0.0
+uvloop
+orjson
+requests
+urllib3
+openpyxl

@@ -12,6 +12,6 @@ variables:
   CI_APPLICATION_TAG: $CI_COMMIT_REF_SLUG
   KANIKO_CLI_ARGS: "--skip-tls-verify"
   PMD_CPD_DIR: "src"
-  #DEPLOYMENT: "deployment/csa-frontend"
-  #NAMESPACE: "sera"
+  DEPLOYMENT: "deployment/sentinel"
+  NAMESPACE: "halo-gtt-customer-cve-analyzer"
 

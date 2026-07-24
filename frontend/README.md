@@ -73,6 +73,7 @@ App.jsx — owns global state (selectedTenant)
 ```
 
 The navigation bar is always visible and contains:
+
 - The **Global Scan Panel** (triggers and monitors a full estate scan)
 - The **Tenant Selector** (debounced search against the NetBox API)
 
@@ -85,13 +86,16 @@ The navigation bar is always visible and contains:
 **Component:** `src/components/Leaderboard.jsx`
 
 The default view shown when no tenant is selected. It fetches data from two endpoints in parallel on mount and refreshes every 60 seconds:
+
 - `GET /api/stats` — estate-wide aggregates
 - `GET /api/leaderboard?limit=500` — per-tenant ranking rows
 
 **Sections:**
 
 #### Estate Stat Cards
+
 Six summary cards across the top showing:
+
 - Total clients scanned, total devices, vulnerable devices (with % of estate), critical devices (CVE score ≥ 9.0), total CVE instances, and peak CVE score.
 
 #### Info Panels (4-column grid on wide screens)
@@ -104,6 +108,7 @@ Six summary cards across the top showing:
 | AI Analysis Engine | `GET /api/ai/stats` (every 5s) | Live LLM worker status, queue depth, session totals, latency stats, cache hit rate |
 
 #### Customer Rankings Table
+
 A sortable, filterable table of all scanned tenants ordered by CVE score descending by default. Columns:
 
 | Column | Notes |
@@ -141,7 +146,9 @@ Loaded when a tenant is selected. The component:
 5. **Export** — An "Export .xlsx" button (visible once results are loaded) calls `GET /api/export/tenant/{id}` to download an Excel workbook for the tenant.
 
 #### Estate Summary Panel (`EstateSummaryPanel`)
+
 Shown above the device list when the LLM summary is available. Displays:
+
 - Risk posture badge with border/background colour matching severity
 - One-sentence risk summary
 - Three stat boxes: total scanned, vulnerable count, max CVE score
@@ -150,9 +157,11 @@ Shown above the device list when the LLM summary is available. Displays:
 - Trend comparison vs previous scan
 
 #### Device List
+
 Each row shows: category icon, device name, model/cluster, OS string, and CVSS score. Colour-coded left border: green = clean, yellow = low, orange = medium/high, red = critical.
 
 Clicking a row opens a **Device Detail Modal** with:
+
 - Full CVE list: each entry links to the NVD detail page and shows score, severity, and description
 - AI Analysis section: the LLM-generated device-specific security assessment, rendered as Markdown
 
@@ -209,6 +218,7 @@ Shown on the leaderboard landing page. Polls `GET /api/ai/stats` every 5 seconds
 A searchable dropdown in the nav bar. Typing triggers a debounced (300ms) request to `GET /api/tenants/search?q=...`. When the dropdown opens without a search query, it loads `GET /api/tenants/recent` to show previously scanned tenants sorted by most recently scanned.
 
 Features:
+
 - **"Has devices" toggle** — filters NetBox results to tenants that have at least one device or VM (performs a quick count check per tenant against NetBox)
 - Shows device count and scan age for tenants with cached data
 - Stale indicator (yellow clock icon) when cache is ≥ 24 hours old
@@ -221,18 +231,22 @@ Features:
 Two SSE endpoints are used:
 
 ### `GET /api/results/{tenant_id}/stream`
+
 Used by the Tenant View. If a scan is active, emits device update events as they arrive from the scan worker. If no scan is active, flushes the full cached result set immediately and closes.
 
 Event format:
+
 ```json
 {"type": "device", "data": {"resource_name": "...", "os": "...", "highest_severity_score": 9.1, "cves": [...], "llm_analysis": "..."}}
 {"type": "complete"}
 ```
 
 ### `GET /api/scan/global/stream`
+
 Used by the Global Scan Panel. Emits progress snapshots throughout the scan and a final `complete` event.
 
 Event format:
+
 ```json
 {"type": "progress", "state": {"status": "running", "devices_fetched": 50000, "nvd_queried": 420, ...}}
 {"type": "complete", "state": {...}}
@@ -288,6 +302,7 @@ npm run dev
 The dev server starts at `http://localhost:5173` with hot module replacement enabled.
 
 To build for production:
+
 ```bash
 npm run build        # outputs to dist/
 npm run preview      # preview the production build locally
@@ -298,12 +313,14 @@ npm run preview      # preview the production build locally
 ## Docker
 
 The frontend image is a two-stage build:
+
 1. **Build stage:** `node:alpine` — runs `npm ci && npm run build`
 2. **Serve stage:** `nginx:alpine` — copies the `dist/` output and the `nginx/default.conf` configuration
 
 `entrypoint.sh` runs before nginx starts and injects runtime environment variables into `env-config.js` so the SPA can read them from `window._env_` without a rebuild.
 
 Build and run:
+
 ```bash
 docker build -t halo-cve-frontend ./dashboard/frontend
 docker run -p 80:80 \
@@ -313,6 +330,7 @@ docker run -p 80:80 \
 ```
 
 Or use the full compose stack:
+
 ```bash
 docker compose -f docker-compose.cve.yaml up --build
 ```

@@ -3,7 +3,7 @@ include:
     ref: 'main'
     file:
       - '/collections/Container-Single-Platform-Base.gitlab-ci.yml'
-        #- '/collections/Node-Build-Test.gitlab-ci.yml'
+      # - '/collections/Node-Build-Test.gitlab-ci.yml'
 
 variables:
   CONTAINER_BUILD_NAME: $CI_PROJECT_NAME
@@ -12,6 +12,5 @@ variables:
   CI_APPLICATION_TAG: $CI_COMMIT_REF_SLUG
   KANIKO_CLI_ARGS: "--skip-tls-verify"
   PMD_CPD_DIR: "src"
-  #DEPLOYMENT: "deployment/csa-frontend"
-  #NAMESPACE: "sera"
-
+  # DEPLOYMENT: "deployment/csa-frontend"
+  # NAMESPACE: "sera"

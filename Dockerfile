@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: build the React SPA ----
-FROM node:20-alpine AS frontend
+# Base images pinned by digest for reproducibility and the CI annotation check.
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend
 WORKDIR /app
 COPY frontend/package.json ./
 # lockfile is known to drift; install (not ci) regenerates the tree
@@ -10,7 +11,7 @@ COPY frontend/ ./
 RUN npm run build            # -> /app/dist
 
 # ---- Stage 2: single runtime image (nginx + uvicorn + redis via supervisor) ----
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
 ENV PYTHONUNBUFFERED=1 \
     CACHE_DIR=/app/cache \
     REDIS_HOST=127.0.0.1 \

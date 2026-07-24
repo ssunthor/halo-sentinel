@@ -1,3 +1,4 @@
+---
 # Convenience wrapper for the single-container Sentinel image.
 #   docker compose up --build
 # Then open http://localhost:8080
@@ -6,26 +7,27 @@ services:
     build: .
     image: sentinel:latest
     ports:
-      - "8080:80"
+      - '8080:80'
     volumes:
       - sentinel-cache:/app/cache      # SQLite DB + JSON caches survive restarts
     environment:
       # Redis is bundled in the container; these defaults already point at it.
-      # REDIS_HOST: "127.0.0.1"
-      # REDIS_PASSWORD: ""
+      # REDIS_HOST: '127.0.0.1'
+      # REDIS_PASSWORD: ''
 
       # --- external services the backend talks to (see backend/main.py getenv block) ---
-      NETBOX_URL: "http://netbox.example.net"
-      NETBOX_TOKEN: "changeme"
-      VLLM_ENDPOINT: "http://vllm.example.net:8080/v1/chat/completions"
-      VLLM_MODEL: "google/gemma-3-27b-it"
-      VLLM_TOKEN: "NONE"
-      # LLM_AUTH_URL: ""          # set these three for Keycloak client-credentials auth
-      # LLM_CLIENT_ID: ""
-      # LLM_CLIENT_SECRET: ""
-      DAILY_SCAN_TIME_UTC: "02:00"
-      FBA_ENABLED: "true"
+      NETBOX_URL: 'http://netbox.example.net'
+      NETBOX_TOKEN: 'changeme'
+      VLLM_ENDPOINT: 'http://vllm.example.net:8080/v1/chat/completions'
+      VLLM_MODEL: 'google/gemma-3-27b-it'
+      VLLM_TOKEN: 'NONE'
+      # LLM_AUTH_URL: ''          # set these three for Keycloak client-credentials auth
+      # LLM_CLIENT_ID: ''
+      # LLM_CLIENT_SECRET: ''
+      DAILY_SCAN_TIME_UTC: '02:00'
+      FBA_ENABLED: 'true'
     restart: unless-stopped
 
 volumes:
   sentinel-cache:
+    driver: local

@@ -343,3 +343,28 @@ def test_redact_is_idempotent():
         once, _ = cs.redact(text)
         twice, _ = cs.redact(once)
         assert once == twice
+
+
+# ── verdicts → prose analysis ──────────────────────────────────────────────
+
+def test_verdict_fingerprint_and_prompt_block():
+    cves = [{"id": "CVE-A"}, {"id": "CVE-B"}, {"id": "CVE-C"}]
+    assert ca.verdict_fingerprint({}, cves) == "" and ca.verdicts_prompt_block(None, cves) == ""
+
+    verdicts = {
+        "CVE-A": {"verdict": "not_applicable", "rationale": "SSL-VPN disabled", "stale": False},
+        "CVE-B": {"verdict": "exploitable", "rationale": "admin on WAN", "stale": True},   # old config
+        "CVE-Z": {"verdict": "exploitable", "rationale": "other device's CVE", "stale": False},
+        "CVE-C": {"verdict": "not_assessed", "rationale": "", "stale": False},
+    }
+    fp = ca.verdict_fingerprint(verdicts, cves)
+    assert fp and fp == ca.verdict_fingerprint(dict(reversed(list(verdicts.items()))), cves)
+
+    block = ca.verdicts_prompt_block(verdicts, cves)
+    assert "CVE-A: NOT APPLICABLE" in block and "SSL-VPN disabled" in block
+    assert "admin on WAN" not in block and "CVE-Z" not in block      # stale / foreign excluded
+    assert "version match only): CVE-B, CVE-C" in block
+
+    # a changed verdict must change the key, so the old write-up is not reused
+    verdicts["CVE-A"] = {**verdicts["CVE-A"], "verdict": "exploitable"}
+    assert ca.verdict_fingerprint(verdicts, cves) != fp

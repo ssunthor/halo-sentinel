@@ -18,7 +18,30 @@ FBA_BASE_URL = os.getenv("FBA_BASE_URL", "https://gia-ai.gt-t.net/api/fba")
 FBA_API_KEY  = os.getenv("FBA_API_KEY",  "6PSYFpBW4Ax48V2CNpXuid1679tTtMKk")
 FBA_TIMEOUT  = float(os.getenv("FBA_TIMEOUT_SECONDS", "15"))
 
+# FBA's certificate is issued by the corporate CA (GICORP-ROOT-CA01), which is
+# not in httpx's default (certifi) bundle. Set FBA_VERIFY_SSL to the CA bundle
+# path (preferred) or "false". Same semantics as halo-backend's fba_sync.py.
+_verify_env = os.getenv("FBA_VERIFY_SSL", "true").strip()
+FBA_VERIFY_SSL = (False if _verify_env.lower() in ("false", "0", "no")
+                  else True if _verify_env.lower() in ("true", "1", "yes", "")
+                  else _verify_env)
+
+# Most recent request failure, for the enrichment worker's log line. Lookups
+# used to fail silently — a TLS or auth problem looked exactly like "FBA has no
+# config for any device".
+last_error: str | None = None
+
+
+def _note_error(err) -> None:
+    global last_error
+    last_error = f"{type(err).__name__}: {err}"[:300] if isinstance(err, Exception) else str(err)[:300]
+
 _HEADERS = {"X-API-Key": FBA_API_KEY}
+
+# Returned in place of a data dict when the lookup could not be completed
+# (timeout, connection error, 5xx). Distinct from None, which means FBA answered
+# and holds no config for the device — callers must not cache this as "not found".
+LOOKUP_FAILED = object()
 
 
 def _name_variants(name: str) -> list:
@@ -68,8 +91,9 @@ async def _fetch_one(
 ) -> tuple:
     """
     Resolve a NetBox device name to FBA data.
-    Returns (device_name, data_dict | None).
+    Returns (device_name, data_dict | None | LOOKUP_FAILED).
     """
+    failed = False   # any request errored → a miss is not a trustworthy "not found"
     async with semaphore:
         # ── 1. Direct lookup (fast path) ──────────────────────────────────
         for name in _name_variants(device_name):
@@ -80,10 +104,12 @@ async def _fetch_one(
                     body = resp.json()
                     if body.get("success") and body.get("data"):
                         return device_name, body["data"]
-                elif resp.status_code == 404:
-                    continue
-            except Exception:
-                continue
+                elif resp.status_code != 404:
+                    failed = True
+                    _note_error(f"HTTP {resp.status_code} from {url}")
+            except Exception as e:
+                failed = True
+                _note_error(e)
 
         # ── 2. Search fallback (handles HA suffixes: -A/-B, -1/-2, -pri/-sec) ──
         for query in _name_variants(device_name):
@@ -95,6 +121,8 @@ async def _fetch_one(
                     timeout=FBA_TIMEOUT,
                 )
                 if resp.status_code != 200:
+                    failed = True
+                    _note_error(f"HTTP {resp.status_code} from inventory search")
                     continue
                 body = resp.json()
                 items = body.get("data", {}).get("items") or []
@@ -123,8 +151,12 @@ async def _fetch_one(
                             if db.get("success") and db.get("data"):
                                 details.append(db["data"])
                                 filenames.append(item.get("filename", ""))
-                    except Exception:
-                        continue
+                        else:
+                            failed = True
+                            _note_error(f"HTTP {dr.status_code} from {detail_url}")
+                    except Exception as e:
+                        failed = True
+                        _note_error(e)
 
                 if not details:
                     continue
@@ -133,10 +165,11 @@ async def _fetch_one(
                     return device_name, details[0]
                 return device_name, _merge_results(details, filenames)
 
-            except Exception:
-                continue
+            except Exception as e:
+                failed = True
+                _note_error(e)
 
-    return device_name, None
+    return device_name, (LOOKUP_FAILED if failed else None)
 
 
 async def fetch_configs_chunk(
@@ -145,12 +178,13 @@ async def fetch_configs_chunk(
 ) -> dict:
     """
     Fetch FBA config data for a chunk of device names.
-    Returns {device_name: data_dict | None} where None means no config found.
+    Returns {device_name: data_dict | None | LOOKUP_FAILED} — None means FBA holds
+    no config for the device; LOOKUP_FAILED means we could not find out.
     """
     semaphore = asyncio.Semaphore(concurrency)
     results = {}
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=FBA_VERIFY_SSL) as client:
         tasks = [_fetch_one(client, name, semaphore) for name in device_names]
         for coro in asyncio.as_completed(tasks):
             name, data = await coro
@@ -169,12 +203,14 @@ async def fetch_raw_config(config_url: str) -> str | None:
     if not config_url or not config_url.startswith(FBA_BASE_URL.rstrip("/") + "/"):
         return None
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=FBA_VERIFY_SSL) as client:
             resp = await client.get(config_url, headers=_HEADERS, timeout=max(FBA_TIMEOUT, 60))
         if resp.status_code != 200:
+            _note_error(f"HTTP {resp.status_code} from {config_url}")
             return None
         body = resp.json()
         raw = (body.get("data") or {}).get("raw_config") if body.get("success") else None
         return raw if isinstance(raw, str) and raw.strip() else None
-    except Exception:
+    except Exception as e:
+        _note_error(e)
         return None

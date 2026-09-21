@@ -20,6 +20,16 @@ def _scan(cves):
     }]})
 
 
+def _fresh():
+    """Empty every table — tests share one SQLite file, and FBA data / verdicts
+    deliberately survive rescans, so state would otherwise leak between tests."""
+    db.init_db()
+    conn = db._connect()
+    for table in ("cve_config_verdicts", "device_configs", "cve_requirements", "devices", "tenants"):
+        conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+
+
 def _verdict(cve_id, verdict="exploitable"):
     return {"cve_id": cve_id, "verdict": verdict, "rationale": "r",
             "evidence": [{"section": "s", "start_line": 1, "end_line": 2, "snippet": "a\nb", "note": ""}],
@@ -84,3 +94,80 @@ def test_fba_fetch_queue_respects_pushed_configs():
     db._connect().commit()
     [row] = db.get_devices_needing_config_fetch()
     assert row["fba_config_url"] == "https://fba/config/x.conf"
+
+
+def test_fba_data_survives_rescan_and_states():
+    _fresh()
+    _scan(["CVE-1"])
+    dev_id = db._connect().execute("SELECT id FROM devices").fetchone()["id"]
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "pending"
+
+    # a failed lookup is not "not found", keeps the device out of the queue for the
+    # retry window, and never clobbers good data
+    db.mark_fba_lookup_failed(dev_id, "2099-01-01T00:00:00+00:00")
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "lookup_failed"
+    assert db.get_devices_needing_fba_refresh(24, 1) == []
+
+    db.update_device_fba(dev_id, {"analyzed": True, "vulnerable": False, "findings": [{"issue": "x"}],
+                                  "config_url": "https://fba/config/x.conf"}, NOW)
+    got = db.get_device_fba_by_name("Edge-FW-01")
+    assert got["fba_state"] == "analyzed" and got["fba_lookup_failed_at"] is None
+
+    # the daily rescan deletes + re-inserts the row — FBA data must come back with it
+    _scan(["CVE-1", "CVE-2"])
+    got = db.get_device_fba_by_name("Edge-FW-01")
+    assert got["fba_state"] == "analyzed" and got["fba_findings"] == [{"issue": "x"}]
+
+    new_id = db._connect().execute("SELECT id FROM devices").fetchone()["id"]
+    db.update_device_fba(new_id, None, NOW)
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "not_found"
+
+
+def test_effective_score_ignores_ruled_out_cves():
+    _fresh()
+    db.save_tenant_results("t1", {"tenant_name": "Acme", "devices": [{
+        "resource_name": "Edge-FW-01", "os": "FortiOS 7.2.5", "platform_name": "FortiOS",
+        "highest_severity_score": 9.8, "is_vulnerable": True,
+        "cves": [{"id": "CVE-HI", "score": 9.8, "severity": "CRITICAL", "description": "x"},
+                 {"id": "CVE-MID", "score": 6.5, "severity": "MEDIUM", "description": "x"}],
+    }]})
+
+    def scores():
+        dev = db.load_tenant_results("t1")["devices"][0]
+        row = next(r for r in db.get_leaderboard() if r["tenant_id"] == "t1")
+        return (dev["highest_severity_score"], dev["effective_severity_score"],
+                row["max_score"], row["effective_max_score"], row["effective_vulnerable_devices"])
+
+    assert scores() == (9.8, 9.8, 9.8, 9.8, 1)            # no config → effective == raw
+
+    db.upsert_device_config("Edge-FW-01", "push", "config a\nend", "hash-A", "fortios", 0, NOW)
+    db.save_cve_verdicts("Edge-FW-01", "hash-A", [_verdict("CVE-HI", "not_applicable")], NOW)
+    assert scores() == (9.8, 6.5, 9.8, 6.5, 1)            # raw CVSS untouched
+    cves = {c["id"]: c["config_verdict"] for c in db.load_tenant_results("t1")["devices"][0]["cves"]}
+    assert cves == {"CVE-HI": "not_applicable", "CVE-MID": None}
+
+    db.save_cve_verdicts("Edge-FW-01", "hash-A", [_verdict("CVE-MID", "mitigated")], NOW)
+    assert scores() == (9.8, 0.0, 9.8, 0.0, 0)
+
+    # survives a rescan …
+    db.save_tenant_results("t1", {"tenant_name": "Acme", "devices": [{
+        "resource_name": "Edge-FW-01", "highest_severity_score": 9.8, "is_vulnerable": True,
+        "cves": [{"id": "CVE-HI", "score": 9.8, "severity": "CRITICAL", "description": "x"},
+                 {"id": "CVE-MID", "score": 6.5, "severity": "MEDIUM", "description": "x"}]}]})
+    assert scores() == (9.8, 0.0, 9.8, 0.0, 0)
+
+    # … but a changed config invalidates the verdicts, so the score must fall back to raw
+    db.upsert_device_config("Edge-FW-01", "push", "config b\nend", "hash-B", "fortios", 0, NOW)
+    assert scores() == (9.8, 9.8, 9.8, 9.8, 1)
+
+    ranked = [r["tenant_id"] for r in db.get_leaderboard(score="effective")]
+    assert "t1" in ranked
+
+
+def test_reset_llm_analysis_queues_regeneration():
+    _fresh()
+    _scan(["CVE-1"])
+    db.update_device_llm_analysis("t1", "Edge-FW-01", "old write-up")
+    assert db.get_devices_needing_llm("t1") == []
+    db.reset_device_llm_analysis("edge-fw-01")
+    assert [d["resource_name"] for d in db.get_devices_needing_llm("t1")] == ["Edge-FW-01"]

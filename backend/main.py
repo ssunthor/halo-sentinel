@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 import httpx
 from datetime import datetime, timedelta, timezone
 import config_applicability
+import cve_applicability
 import email_report
 import fba_client
 import gia_client
@@ -77,6 +78,7 @@ DAILY_SCAN_TIME_UTC  = os.getenv("DAILY_SCAN_TIME_UTC",  "02:00")
 FBA_ENABLED          = os.getenv("FBA_ENABLED", "true").lower() not in ("0", "false", "no")
 FBA_MAX_CONCURRENCY  = int(os.getenv("FBA_MAX_CONCURRENCY", "20"))
 FBA_CACHE_HOURS      = int(os.getenv("FBA_CACHE_HOURS", "24"))
+FBA_RETRY_HOURS      = int(os.getenv("FBA_RETRY_HOURS", "1"))   # after a FAILED lookup (not a "not found")
 
 CACHE_DIR = "/app/cache"
 CVE_CACHE_FILE = os.path.join(CACHE_DIR, "cve_cache.json")
@@ -218,7 +220,16 @@ class VulnerabilityRequestBroker:
 # LLM HELPERS
 # ---------------------------------------------------------------------------
 
-async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None):
+def _analysis_cache_key(resource_name, cves, verdicts=None):
+    """Prose-analysis cache key. Devices with config verdicts get a verdict
+    fingerprint appended, so an analysis written before the verdicts existed
+    (or under different ones) is regenerated instead of reused."""
+    key = f"{resource_name}-{'-'.join(sorted(c['id'] for c in cves))}"
+    fp = cve_applicability.verdict_fingerprint(verdicts, cves)
+    return f"{key}-cfg:{fp}" if fp else key
+
+
+async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None, verdicts=None):
     def call_llm():
         try:
             cve_list = "\n".join([f"- {c['id']}: {c['description']} (Score: {c['score']})" for c in cves])
@@ -249,7 +260,8 @@ async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None):
                 f"Analyze the security risk for resource '{resource_name}' "
                 f"(Model: {model}, OS: {os_info}).\n\n"
                 f"The following vulnerabilities were found:\n{cve_list}"
-                f"{fba_section}\n\n"
+                f"{fba_section}"
+                f"{cve_applicability.verdicts_prompt_block(verdicts, cves)}\n\n"
                 f"Provide a concise assessment of the impact and recommended actions."
             )
             messages = [{"role": "user", "content": prompt}]
@@ -551,11 +563,17 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
         llm_analysis = partial_res["llm_analysis"]
         if device_cves:
-            key = f"{resource_name}-{'-'.join(sorted([c['id'] for c in device_cves]))}"
+            verdicts = await asyncio.get_running_loop().run_in_executor(
+                thread_pool, db.get_cve_verdicts, resource_name
+            )
+            key = _analysis_cache_key(resource_name, device_cves, verdicts)
             if key in llm_analysis_cache:
                 llm_analysis = llm_analysis_cache[key]
             else:
-                llm_analysis = await get_llm_analysis(resource_name, model, f"{os_name} {os_version or ''}", device_cves)
+                llm_analysis = await get_llm_analysis(
+                    resource_name, model, f"{os_name} {os_version or ''}", device_cves,
+                    verdicts=verdicts,
+                )
                 llm_analysis_cache[key] = llm_analysis
                 save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)
 
@@ -1228,7 +1246,8 @@ async def llm_analysis_worker():
                         continue
 
                     cves     = dev["cves"]
-                    cve_key  = f"{dname}-{'-'.join(sorted(c['id'] for c in cves))}"
+                    verdicts = await loop.run_in_executor(thread_pool, db.get_cve_verdicts, dname)
+                    cve_key  = _analysis_cache_key(dname, cves, verdicts)
                     from_cache = cve_key in llm_analysis_cache
 
                     _ai_stats["current_device"] = dname
@@ -1250,6 +1269,7 @@ async def llm_analysis_worker():
                                 dev.get("os", "Unknown"),
                                 cves,
                                 fba_data,
+                                verdicts,
                             )
                         elapsed_ms = round((time.time() - t0) * 1000)
                         _ai_stats["total_api_calls"] += 1
@@ -1987,12 +2007,16 @@ async def export_drilldown(type: str, value: str = ""):
 
 
 @app.get("/api/leaderboard")
-async def get_leaderboard(limit: int = 100, min_devices: int = 1):
+async def get_leaderboard(limit: int = 100, min_devices: int = 1, score: str = "cvss"):
     """
     Return tenants ranked by worst security posture (highest CVE score, then most vulnerable devices).
     Useful for prioritising remediation across the estate.
+
+    score=effective ranks by the config-aware score, which ignores CVEs a device's
+    running config has ruled out (not_applicable / mitigated). Every row carries
+    both max_score (raw CVSS) and effective_max_score regardless.
     """
-    return db.get_leaderboard(limit=min(limit, 1000), min_devices=min_devices)
+    return db.get_leaderboard(limit=min(limit, 1000), min_devices=min_devices, score=score)
 
 
 @app.get("/api/tenants")
@@ -2252,7 +2276,7 @@ async def fba_enrichment_worker():
 
             loop = asyncio.get_running_loop()
             stale = await loop.run_in_executor(
-                thread_pool, db.get_devices_needing_fba_refresh, FBA_CACHE_HOURS
+                thread_pool, db.get_devices_needing_fba_refresh, FBA_CACHE_HOURS, FBA_RETRY_HOURS
             )
 
             if not stale:
@@ -2264,6 +2288,7 @@ async def fba_enrichment_worker():
             total         = len(device_names)
             done_count    = 0
             found_count   = 0
+            failed_count  = 0
             CHUNK_SIZE    = 200
 
             print(f"🔍 FBA: enriching {total} device(s) in chunks of {CHUNK_SIZE} (concurrency={FBA_MAX_CONCURRENCY})")
@@ -2284,10 +2309,19 @@ async def fba_enrichment_worker():
                     device_id = id_by_name.get(name)
                     if device_id is None:
                         continue
+                    done_count += 1
+                    if data is fba_client.LOOKUP_FAILED:
+                        # Timeout / 5xx: we learned nothing. Keep the device's existing
+                        # FBA data and retry in FBA_RETRY_HOURS — recording this as
+                        # "not found" would hide a real config for FBA_CACHE_HOURS.
+                        await loop.run_in_executor(
+                            thread_pool, db.mark_fba_lookup_failed, device_id, scanned_at
+                        )
+                        failed_count += 1
+                        continue
                     await loop.run_in_executor(
                         thread_pool, db.update_device_fba, device_id, data, scanned_at
                     )
-                    done_count += 1
                     if data is not None:
                         found_count += 1
 
@@ -2297,7 +2331,12 @@ async def fba_enrichment_worker():
                 # Brief yield between chunks to keep the event loop responsive
                 await asyncio.sleep(1)
 
-            print(f"✅ FBA: complete — {done_count} processed, {found_count} configs found, {done_count - found_count} not available.")
+            print(f"✅ FBA: complete — {done_count} processed, {found_count} configs found, "
+                  f"{done_count - found_count - failed_count} not in FBA, {failed_count} lookups failed (retry in {FBA_RETRY_HOURS}h).")
+            if failed_count:
+                print(f"⚠️  FBA: last lookup error — {fba_client.last_error}"
+                      + ("  → FBA's certificate is issued by the corporate CA; set FBA_VERIFY_SSL to the CA bundle path."
+                         if "CERTIFICATE_VERIFY_FAILED" in (fba_client.last_error or "") else ""))
 
         except Exception as e:
             print(f"❌ FBA enrichment worker error: {e}")

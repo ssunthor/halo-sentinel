@@ -228,6 +228,16 @@ function CopyButton({ text }) {
   );
 }
 
+// Why there is no FBA audit to show. These used to be one message ("No
+// configuration profile found"), which was wrong for devices that simply had
+// not been looked up yet or whose lookup had failed.
+const FBA_EMPTY_STATE = {
+  pending: 'Not checked against FBA yet — the lookup for this device is queued.',
+  lookup_failed: 'The FBA lookup for this device failed (FBA unreachable or returned an error). It is retried automatically.',
+  not_analyzed: "FBA holds this device's configuration but has not audited it yet.",
+  not_found: 'No configuration profile found for this device in the FBA system.',
+};
+
 const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
   const [fba, setFba]         = useState(null);
   const [loading, setLoading] = useState(true);
@@ -279,7 +289,7 @@ const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
         <h3 className="text-sm font-bold mb-2 text-cyan-400 flex items-center gap-2">
           <ShieldOff size={14} /> Config Analysis
         </h3>
-        <p className="text-xs text-gray-600">No configuration profile found for this device in the FBA system.</p>
+        <p className="text-xs text-gray-600">{FBA_EMPTY_STATE[fba.fba_state] || FBA_EMPTY_STATE.not_found}</p>
       </div>
     );
   }
@@ -732,8 +742,18 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                   {device.llm_analysis === 'Scanning...' ? (
                     <RefreshCw size={14} className="animate-spin text-gray-600 ml-auto" />
                   ) : (
-                    <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
-                      {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : '0.0'}
+                    <span className="flex flex-col items-end leading-tight">
+                      <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
+                        {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : '0.0'}
+                      </span>
+                      {device.effective_severity_score != null && device.effective_severity_score < device.highest_severity_score && (
+                        <span
+                          className={`text-[10px] font-mono font-bold ${getSeverityTextClass(device.effective_severity_score)}`}
+                          title="Effective score: highest CVSS among the CVEs this device's running configuration has NOT ruled out (feature not enabled / already mitigated). The raw CVSS score above is unchanged."
+                        >
+                          <span className="text-gray-500 font-normal">effective </span>{device.effective_severity_score.toFixed(1)}
+                        </span>
+                      )}
                     </span>
                   )}
                 </div>

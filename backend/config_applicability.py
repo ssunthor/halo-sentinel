@@ -125,9 +125,8 @@ def _assess_device_sync(device: dict) -> tuple[int, bool]:
     cfg = db.get_device_config(name)
     if not cfg:
         return 0, True
-    existing = {
-        cid for cid, v in db.get_cve_verdicts(name).items() if not v["stale"]
-    }
+    before = db.get_cve_verdicts(name)
+    existing = {cid for cid, v in before.items() if not v["stale"]}
     all_cves = db.get_device_cves(device["id"])
     todo = [c for c in all_cves[:MAX_CVES_PER_DEVICE] if c["id"] not in existing]
     overflow = [c for c in all_cves[MAX_CVES_PER_DEVICE:] if c["id"] not in existing]
@@ -162,6 +161,11 @@ def _assess_device_sync(device: dict) -> tuple[int, bool]:
               "rationale": f"Only the {MAX_CVES_PER_DEVICE} highest-scoring CVEs are assessed per device."}
              for c in overflow]
     db.save_cve_verdicts(name, cfg["content_hash"], rows, _now())
+    # The prose "AI Analysis" is written from the verdicts; if they changed, queue
+    # it for regeneration so the two never contradict each other.
+    if (ca.verdict_fingerprint(before, all_cves)
+            != ca.verdict_fingerprint(db.get_cve_verdicts(name), all_cves)):
+        db.reset_device_llm_analysis(name)
     assessed = len(rows) - len(overflow)
     return assessed, assessed >= len(todo)
 

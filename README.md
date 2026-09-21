@@ -74,11 +74,36 @@ Config sources:
   (see `sentinel_push.py` in halo-backend). Push is disabled until `CONFIG_PUSH_TOKEN` is
   set. A pushed config is never overwritten by FBA's copy.
 
+Two things follow from the verdicts:
+
+- **Effective score.** Each device (and tenant roll-up) carries an
+  `effective_severity_score`: the highest CVSS among CVEs the device's current config has
+  _not_ ruled out (`not_applicable` / `mitigated`). Raw CVSS is never changed — both are
+  shown, and `GET /api/leaderboard?score=effective` ranks by the config-aware one. A changed
+  config invalidates its verdicts, so the effective score falls back to raw until re-analysed.
+- **The prose AI Analysis agrees with them.** The per-device write-up is given the verdicts
+  as established facts, its cache key includes a verdict fingerprint, and it is regenerated
+  whenever the verdicts change — so it never calls a ruled-out CVE "critical".
+
 Code: [backend/config_sections.py](backend/config_sections.py) (redaction, section parsing
 for FortiOS / Cisco-style / Junos), [backend/cve_applicability.py](backend/cve_applicability.py)
 (LLM stages and evidence validation), [backend/config_applicability.py](backend/config_applicability.py)
 (worker, API, env vars). Tests: `cd backend && python3 -m pytest tests -q` (no network or LLM
 needed).
+
+## FBA connectivity
+
+FBA's TLS certificate is issued by the corporate CA (`GICORP-ROOT-CA01`), which is not in
+the default CA bundle the backend's HTTP client uses. Without it every FBA request fails
+certificate verification and no device gets config data. Set `FBA_VERIFY_SSL` to the path
+of a CA bundle containing that root (preferred — mount it into the container), or to
+`false` to skip verification.
+
+A lookup that _fails_ (TLS, timeout, 5xx) is kept separate from one where FBA answers "no
+such device": failures are logged, never overwrite existing data, and are retried after
+`FBA_RETRY_HOURS` (default 1) rather than being cached as "not found" for
+`FBA_CACHE_HOURS`. FBA data is carried across rescans, and the device view distinguishes
+_not checked yet_, _lookup failed_, _not in FBA_ and _in FBA but not audited_.
 
 ## Development (split, without Docker)
 

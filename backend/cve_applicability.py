@@ -31,6 +31,7 @@ Verdicts:
   undetermined        config does not settle it (or evidence failed validation)
 """
 
+import hashlib
 import json
 import re
 
@@ -51,6 +52,64 @@ _STYLE_NOTES = {
     "brace": "Junos curly-brace hierarchy.",
     "indented": "Cisco/Arista-style running-config (column-0 command owns the indented lines below it).",
 }
+
+
+_VERDICT_LABELS = {
+    "exploitable": "EXPLOITABLE (vulnerable feature enabled and reachable)",
+    "mitigated": "MITIGATED BY CONFIG (feature enabled, access already restricted)",
+    "not_applicable": "NOT APPLICABLE (vulnerable feature not enabled on this device)",
+    "config_independent": "CONFIG-INDEPENDENT (no config change helps — patch)",
+    "undetermined": "UNDETERMINED (config does not settle it — treat as applicable)",
+}
+
+
+def current_verdicts(verdicts: dict[str, dict] | None, cves: list[dict]) -> dict[str, dict]:
+    """The subset of stored verdicts that may be relied on for these CVEs:
+    real verdicts, computed against the device's CURRENT config."""
+    ids = {c["id"] for c in cves}
+    return {
+        cid: v for cid, v in (verdicts or {}).items()
+        if cid in ids and not v.get("stale") and v.get("verdict") in _VERDICT_LABELS
+    }
+
+
+def verdict_fingerprint(verdicts: dict[str, dict] | None, cves: list[dict]) -> str:
+    """Short stable digest of a device's current verdicts ('' when it has none).
+    Part of the prose-analysis cache key, so a write-up generated before the
+    verdicts existed (or under different ones) is never reused."""
+    cur = current_verdicts(verdicts, cves)
+    if not cur:
+        return ""
+    joined = "|".join(f"{cid}:{cur[cid]['verdict']}" for cid in sorted(cur))
+    return hashlib.sha256(joined.encode()).hexdigest()[:12]
+
+
+def verdicts_prompt_block(verdicts: dict[str, dict] | None, cves: list[dict]) -> str:
+    """Prompt section that makes the prose risk write-up agree with the per-CVE
+    config verdicts shown beside it in the UI."""
+    cur = current_verdicts(verdicts, cves)
+    if not cur:
+        return ""
+    lines = "\n".join(
+        f"- {cid}: {_VERDICT_LABELS[v['verdict']]} — {(v.get('rationale') or '')[:400]}"
+        for cid, v in sorted(cur.items())
+    )
+    unassessed = sorted({c["id"] for c in cves} - set(cur))
+    rest = (f"\nNot assessed against the config (version match only): {', '.join(unassessed[:20])}"
+            if unassessed else "")
+    return (
+        "\n\nCONFIG-VERIFIED APPLICABILITY (each verdict was checked against this device's "
+        "actual running configuration and is shown to the user next to your write-up):\n"
+        f"{lines}{rest}\n\n"
+        "Treat these verdicts as established facts and stay consistent with them:\n"
+        "- Lead with EXPLOITABLE CVEs — they are the urgent ones.\n"
+        "- For NOT APPLICABLE or MITIGATED CVEs, say the software version is affected but the "
+        "device's configuration currently rules out or limits exploitation, and why. Do NOT call "
+        "them critical, urgent or actively exploitable. Note the protection lasts only while the "
+        "configuration stays that way, so they still belong in the next planned upgrade.\n"
+        "- Base the overall urgency on the CVEs that remain exploitable, config-independent or "
+        "undetermined — not on the raw CVSS of CVEs the configuration has ruled out."
+    )
 
 
 def _loads(text: str):

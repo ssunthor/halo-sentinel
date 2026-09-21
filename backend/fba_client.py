@@ -45,6 +45,8 @@ def _merge_results(details: list, filenames: list) -> dict:
         "error":         all(r.get("error")           for r in details),
         "findings":      [],
         "reason":        "",
+        # Config-aware CVE analysis reads one node's config; HA peers share theirs.
+        "config_url":    next((r.get("config_url") for r in details if r.get("config_url")), None),
     }
 
     reasons = []
@@ -155,3 +157,24 @@ async def fetch_configs_chunk(
             results[name] = data
 
     return results
+
+
+async def fetch_raw_config(config_url: str) -> str | None:
+    """
+    Fetch a device's full raw configuration from FBA (GET /config/<filename>).
+    Returns the config text, or None if unavailable. The URL comes from an FBA
+    API response, so it is only followed when it points back at FBA_BASE_URL.
+    The text contains secrets — callers must redact before storing or prompting.
+    """
+    if not config_url or not config_url.startswith(FBA_BASE_URL.rstrip("/") + "/"):
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(config_url, headers=_HEADERS, timeout=max(FBA_TIMEOUT, 60))
+        if resp.status_code != 200:
+            return None
+        body = resp.json()
+        raw = (body.get("data") or {}).get("raw_config") if body.get("success") else None
+        return raw if isinstance(raw, str) and raw.strip() else None
+    except Exception:
+        return None

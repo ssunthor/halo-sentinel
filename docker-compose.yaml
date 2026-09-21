@@ -26,6 +26,9 @@ services:
       # LLM_CLIENT_SECRET: ''
       DAILY_SCAN_TIME_UTC: '02:00'
       FBA_ENABLED: 'true'
+      # --- config-aware CVE applicability (see README / backend/config_applicability.py) ---
+      CFG_APPLICABILITY_ENABLED: 'true'
+      # CONFIG_PUSH_TOKEN: ''     # shared secret Halo instances use to push device configs; push is off while unset
     restart: unless-stopped
 
 volumes:

@@ -3,6 +3,8 @@ import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { InfoTip } from './Tooltip';
+import { CveConfigVerdict, ConfigCoverageNote } from './CveConfigVerdict';
+import { useCveConfig } from './useCveConfig';
 
 // ---------------------------------------------------------------------------
 // SEVERITY HELPERS
@@ -368,6 +370,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
   const [total, setTotal] = useState(0);
   const [staleNotice, setStaleNotice] = useState(null);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const cveConfig = useCveConfig(selectedDevice?.resource_name, apiBase);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
@@ -809,6 +812,9 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
               </button>
             </div>
             <div className="overflow-y-auto flex-grow space-y-4 pr-1">
+              {selectedDevice.cves && selectedDevice.cves.length > 0 && (
+                <ConfigCoverageNote cveConfig={cveConfig} />
+              )}
               {selectedDevice.cves && selectedDevice.cves.length > 0 ? (
                 selectedDevice.cves.map((cve, i) => (
                   <div key={i} className="p-4 bg-gray-800 rounded-lg">
@@ -827,6 +833,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                       </span>
                     </div>
                     <p className="mt-2 text-gray-300 text-sm">{cve.description}</p>
+                    <CveConfigVerdict key={`${selectedDevice.resource_name}-${cve.id}`} verdict={cveConfig?.verdicts?.[cve.id]} />
                   </div>
                 ))
               ) : (

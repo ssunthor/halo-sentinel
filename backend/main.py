@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import httpx
 from datetime import datetime, timedelta, timezone
+import config_applicability
 import email_report
 import fba_client
 import gia_client
@@ -120,6 +121,14 @@ _scan_tasks: dict[str, asyncio.Task] = {}
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Config-aware CVE applicability (per-CVE verdicts from device configs)
+config_applicability.configure(
+    llm=vllm_client,
+    thread_pool=thread_pool,
+    is_busy=lambda: _global_scan_state.get("status") == "running",
+)
+app.include_router(config_applicability.router)
 
 
 # ---------------------------------------------------------------------------
@@ -2328,6 +2337,7 @@ async def startup_event():
     print("✅ Notification scheduler started.")
     asyncio.create_task(daily_scan_scheduler())
     asyncio.create_task(fba_enrichment_worker())
+    asyncio.create_task(config_applicability.worker())
     print("✅ Ready.")
 
 

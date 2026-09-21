@@ -146,9 +146,49 @@ def init_db():
             ("fba_reason",               "TEXT"),
             ("fba_findings",             "TEXT"),
             ("fba_error",                "INTEGER"),
+            ("fba_config_url",           "TEXT"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {typedef}")
+
+        # Config-aware CVE applicability. Keyed by device NAME, not devices.id:
+        # save_tenant_results() deletes and re-inserts device rows on every scan,
+        # and configs / verdicts must survive that.
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS device_configs (
+                resource_name   TEXT PRIMARY KEY COLLATE NOCASE,
+                source          TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                content_hash    TEXT NOT NULL,
+                style           TEXT,
+                line_count      INTEGER,
+                redactions      INTEGER,
+                fetched_at      TEXT NOT NULL,
+                checked_at      TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS cve_requirements (
+                cve_id            TEXT NOT NULL,
+                platform          TEXT NOT NULL COLLATE NOCASE,
+                requirements_json TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                PRIMARY KEY (cve_id, platform)
+            );
+
+            CREATE TABLE IF NOT EXISTS cve_config_verdicts (
+                resource_name    TEXT NOT NULL COLLATE NOCASE,
+                cve_id           TEXT NOT NULL,
+                config_hash      TEXT NOT NULL,
+                verdict          TEXT NOT NULL,
+                rationale        TEXT,
+                evidence_json    TEXT,
+                absent_json      TEXT,
+                suggested_change TEXT,
+                change_note      TEXT,
+                analyzed_at      TEXT NOT NULL,
+                PRIMARY KEY (resource_name, cve_id)
+            );
+        """)
 
         # Create index on platform_name after column is guaranteed to exist
         conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_platform ON devices(platform_name)")
@@ -529,7 +569,8 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> Non
                 UPDATE devices
                 SET fba_scanned_at=?, fba_analyzed=0, fba_vulnerable=NULL,
                     fba_vuln_acl=NULL, fba_vuln_password=NULL,
-                    fba_reason=NULL, fba_findings=NULL, fba_error=1
+                    fba_reason=NULL, fba_findings=NULL, fba_error=1,
+                    fba_config_url=NULL
                 WHERE id=?
             """, (scanned_at, device_id))
         else:
@@ -543,6 +584,7 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> Non
                     fba_vuln_password=?,
                     fba_reason=?,
                     fba_findings=?,
+                    fba_config_url=?,
                     fba_error=0
                 WHERE id=?
             """, (
@@ -553,6 +595,7 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> Non
                 1 if data.get("vuln_password") else 0,
                 data.get("reason"),
                 findings_json,
+                data.get("config_url"),
                 device_id,
             ))
         _connect().commit()
@@ -576,6 +619,199 @@ def get_device_fba_by_name(resource_name: str) -> dict | None:
         except Exception:
             d["fba_findings"] = []
     return d
+
+
+# ---------------------------------------------------------------------------
+# Config-aware CVE applicability (device configs, CVE requirements, verdicts)
+# ---------------------------------------------------------------------------
+
+def get_device_config(resource_name: str, with_content: bool = True) -> dict | None:
+    cols = "*" if with_content else (
+        "resource_name, source, content_hash, style, line_count, redactions, fetched_at, checked_at"
+    )
+    row = _connect().execute(
+        f"SELECT {cols} FROM device_configs WHERE resource_name = ?", (resource_name,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_device_config(resource_name: str, source: str, content: str, content_hash: str,
+                         style: str, redactions: int, now: str) -> bool:
+    """Store an already-REDACTED config. Returns True when the content changed
+    (new device or new hash); an identical re-fetch only bumps checked_at."""
+    conn = _connect()
+    with _write_lock:
+        row = conn.execute(
+            "SELECT content_hash FROM device_configs WHERE resource_name = ?", (resource_name,)
+        ).fetchone()
+        if row and row["content_hash"] == content_hash:
+            conn.execute(
+                "UPDATE device_configs SET checked_at = ? WHERE resource_name = ?",
+                (now, resource_name),
+            )
+            conn.commit()
+            return False
+        conn.execute("""
+            INSERT INTO device_configs
+                (resource_name, source, content, content_hash, style, line_count,
+                 redactions, fetched_at, checked_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(resource_name) DO UPDATE SET
+                source=excluded.source, content=excluded.content,
+                content_hash=excluded.content_hash, style=excluded.style,
+                line_count=excluded.line_count, redactions=excluded.redactions,
+                fetched_at=excluded.fetched_at, checked_at=excluded.checked_at
+        """, (resource_name, source, content, content_hash, style,
+              content.count("\n") + 1, redactions, now, now))
+        conn.commit()
+        return True
+
+
+def touch_device_config(resource_name: str, now: str) -> None:
+    with _write_lock:
+        _connect().execute(
+            "UPDATE device_configs SET checked_at = ? WHERE resource_name = ?", (now, resource_name)
+        )
+        _connect().commit()
+
+
+def get_devices_needing_config_fetch(max_age_hours: int = 24, limit: int = 50) -> list[dict]:
+    """Vulnerable devices FBA holds a config for, whose stored copy is missing or
+    stale. A config pushed by a Halo instance (source='push') is never overwritten
+    by the FBA copy — the explicit push wins."""
+    rows = _connect().execute("""
+        SELECT d.resource_name, MAX(d.fba_config_url) AS fba_config_url
+        FROM devices d
+        LEFT JOIN device_configs dc ON dc.resource_name = d.resource_name
+        WHERE d.is_vulnerable = 1
+          AND d.fba_config_url IS NOT NULL AND d.fba_config_url != ''
+          AND (dc.resource_name IS NULL
+               OR (dc.source = 'fba'
+                   AND datetime(dc.checked_at) < datetime('now', ? || ' hours')))
+        GROUP BY d.resource_name
+        ORDER BY MAX(d.highest_severity_score) DESC
+        LIMIT ?
+    """, (f"-{max_age_hours}", limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_devices_needing_cve_assessment(limit: int = 10) -> list[dict]:
+    """Devices that have a stored config and at least one CVE with no verdict
+    for the CURRENT config hash (new CVE, or the config changed)."""
+    rows = _connect().execute("""
+        SELECT d.id, d.resource_name, d.resource_type, d.os, d.platform_name,
+               d.highest_severity_score, dc.content_hash
+        FROM device_configs dc
+        JOIN devices d ON dc.resource_name = d.resource_name
+        WHERE d.is_vulnerable = 1
+          AND EXISTS (
+              SELECT 1 FROM cves c
+              WHERE c.device_id = d.id
+                AND NOT EXISTS (
+                    SELECT 1 FROM cve_config_verdicts v
+                    WHERE v.resource_name = d.resource_name
+                      AND v.cve_id = c.cve_id
+                      AND v.config_hash = dc.content_hash
+                )
+          )
+        GROUP BY d.resource_name
+        ORDER BY d.highest_severity_score DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_device_cves(device_id: int) -> list[dict]:
+    rows = _connect().execute(
+        "SELECT cve_id AS id, score, severity, description FROM cves "
+        "WHERE device_id = ? ORDER BY score DESC", (device_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_cve_requirements(cve_ids: list[str], platform: str) -> dict[str, dict]:
+    import json as _json
+    out = {}
+    conn = _connect()
+    for i in range(0, len(cve_ids), 500):
+        chunk = cve_ids[i:i + 500]
+        ph = ",".join("?" * len(chunk))
+        for r in conn.execute(
+            f"SELECT cve_id, requirements_json FROM cve_requirements "
+            f"WHERE platform = ? AND cve_id IN ({ph})", (platform, *chunk)
+        ):
+            try:
+                out[r["cve_id"]] = _json.loads(r["requirements_json"])
+            except Exception:
+                pass
+    return out
+
+
+def save_cve_requirements(platform: str, requirements: dict[str, dict], now: str) -> None:
+    import json as _json
+    if not requirements:
+        return
+    with _write_lock:
+        _connect().executemany(
+            "INSERT OR REPLACE INTO cve_requirements (cve_id, platform, requirements_json, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            [(cid, platform, _json.dumps(req), now) for cid, req in requirements.items()],
+        )
+        _connect().commit()
+
+
+def save_cve_verdicts(resource_name: str, config_hash: str, rows: list[dict], now: str) -> None:
+    import json as _json
+    if not rows:
+        return
+    with _write_lock:
+        _connect().executemany("""
+            INSERT OR REPLACE INTO cve_config_verdicts
+                (resource_name, cve_id, config_hash, verdict, rationale, evidence_json,
+                 absent_json, suggested_change, change_note, analyzed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [(
+            resource_name, r["cve_id"], config_hash, r["verdict"], r.get("rationale"),
+            _json.dumps(r.get("evidence") or []), _json.dumps(r.get("absent_sections") or []),
+            r.get("suggested_change") or "", r.get("change_note") or "", now,
+        ) for r in rows])
+        _connect().commit()
+
+
+def get_cve_verdicts(resource_name: str) -> dict[str, dict]:
+    """{cve_id: verdict row} for a device. `stale` marks verdicts computed
+    against an older config than the one currently stored."""
+    import json as _json
+    cfg = get_device_config(resource_name, with_content=False)
+    current = cfg["content_hash"] if cfg else None
+    out = {}
+    for r in _connect().execute(
+        "SELECT * FROM cve_config_verdicts WHERE resource_name = ?", (resource_name,)
+    ):
+        d = dict(r)
+        for src, dst in (("evidence_json", "evidence"), ("absent_json", "absent_sections")):
+            try:
+                d[dst] = _json.loads(d.pop(src) or "[]")
+            except Exception:
+                d[dst] = []
+        d["stale"] = d.pop("config_hash") != current
+        d.pop("resource_name", None)
+        out[d["cve_id"]] = d
+    return out
+
+
+def get_config_applicability_counts() -> dict:
+    conn = _connect()
+    configs = conn.execute(
+        "SELECT source, COUNT(*) AS n FROM device_configs GROUP BY source"
+    ).fetchall()
+    verdicts = conn.execute(
+        "SELECT verdict, COUNT(*) AS n FROM cve_config_verdicts GROUP BY verdict"
+    ).fetchall()
+    return {
+        "configs_by_source": {r["source"]: r["n"] for r in configs},
+        "verdicts": {r["verdict"]: r["n"] for r in verdicts},
+    }
 
 
 # ---------------------------------------------------------------------------

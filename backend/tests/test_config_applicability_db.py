@@ -171,3 +171,30 @@ def test_reset_llm_analysis_queues_regeneration():
     assert db.get_devices_needing_llm("t1") == []
     db.reset_device_llm_analysis("edge-fw-01")
     assert [d["resource_name"] for d in db.get_devices_needing_llm("t1")] == ["Edge-FW-01"]
+
+
+def test_failed_lookup_overrides_stale_not_found():
+    _fresh()
+    _scan(["CVE-1"])
+    [dev_id] = db.get_device_ids_by_name("edge-fw-01")
+    db.update_device_fba(dev_id, None, NOW)                        # old code: TLS error stored as a miss
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "not_found"
+    db.mark_fba_lookup_failed(dev_id, NOW)
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "lookup_failed"
+    db.update_device_fba(dev_id, {"analyzed": True}, NOW)          # an answer clears the failure
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "analyzed"
+
+
+def test_one_time_requeue_of_untrusted_not_found_rows():
+    _fresh()
+    _scan(["CVE-1"])
+    [dev_id] = db.get_device_ids_by_name("Edge-FW-01")
+    db.update_device_fba(dev_id, None, NOW)
+    conn = db._connect()
+    conn.execute("PRAGMA user_version = 0")                        # a database from before this release
+    conn.commit()
+    db.init_db()
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "pending"
+    db.update_device_fba(dev_id, None, NOW)
+    db.init_db()                                                   # runs once only
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "not_found"

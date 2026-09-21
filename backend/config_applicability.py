@@ -289,4 +289,10 @@ async def push_device_config(resource_name: str, body: ConfigPush,
 async def get_status():
     loop = asyncio.get_running_loop()
     counts = await loop.run_in_executor(_thread_pool, db.get_config_applicability_counts)
-    return {**_stats, "push_enabled": bool(CONFIG_PUSH_TOKEN), **counts}
+    return {
+        **_stats,
+        "push_enabled": bool(CONFIG_PUSH_TOKEN),
+        "fba_verify_ssl": fba_client.FBA_VERIFY_SSL if isinstance(fba_client.FBA_VERIFY_SSL, bool) else "ca-bundle",
+        "fba_last_error": fba_client.last_error,
+        **counts,
+    }

@@ -2354,6 +2354,31 @@ async def get_device_fba(resource_name: str):
     return data
 
 
+@app.post("/api/device/{resource_name}/fba/refresh")
+async def refresh_device_fba(resource_name: str):
+    """Look this one device up in FBA right now (instead of waiting for the
+    enrichment worker) and return the stored result. When the lookup fails the
+    reason is included as fba_lookup_error — e.g. a certificate-verification
+    failure, which means FBA_VERIFY_SSL needs to point at the corporate CA bundle."""
+    loop = asyncio.get_running_loop()
+    ids = await loop.run_in_executor(thread_pool, db.get_device_ids_by_name, resource_name)
+    if not ids:
+        raise HTTPException(status_code=404, detail="Device not found.")
+    fba_client.last_error = None
+    data = (await fba_client.fetch_configs_chunk([resource_name], 1)).get(resource_name)
+    now = datetime.now(timezone.utc).isoformat()
+    failed = data is fba_client.LOOKUP_FAILED
+    for device_id in ids:
+        if failed:
+            await loop.run_in_executor(thread_pool, db.mark_fba_lookup_failed, device_id, now)
+        else:
+            await loop.run_in_executor(thread_pool, db.update_device_fba, device_id, data, now)
+    out = await loop.run_in_executor(thread_pool, db.get_device_fba_by_name, resource_name)
+    if failed:
+        out["fba_lookup_error"] = fba_client.last_error
+    return out
+
+
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Defense Halo Customer CVE Analyzer starting...")

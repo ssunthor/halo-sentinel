@@ -242,6 +242,7 @@ const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
   const [fba, setFba]         = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(false);
+  const [rechecking, setRechecking] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -256,6 +257,16 @@ const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, [deviceName, apiBase]);
+
+  // Look the device up in FBA now instead of waiting for the background worker.
+  const recheck = () => {
+    setRechecking(true);
+    fetch(`${apiBase}/api/device/${encodeURIComponent(deviceName)}/fba/refresh`, { method: 'POST' })
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(data => setFba(data))
+      .catch(() => {})
+      .finally(() => setRechecking(false));
+  };
 
   if (loading) {
     return (
@@ -290,6 +301,18 @@ const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
           <ShieldOff size={14} /> Config Analysis
         </h3>
         <p className="text-xs text-gray-600">{FBA_EMPTY_STATE[fba.fba_state] || FBA_EMPTY_STATE.not_found}</p>
+        {fba.fba_lookup_error && (
+          <p className="text-[11px] font-mono text-orange-400 mt-1 break-words">{fba.fba_lookup_error}</p>
+        )}
+        <button
+          type="button"
+          onClick={recheck}
+          disabled={rechecking}
+          className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-cyan-400 hover:text-cyan-300 disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={rechecking ? 'animate-spin' : ''} />
+          {rechecking ? 'Checking FBA…' : 'Re-check FBA now'}
+        </button>
       </div>
     );
   }

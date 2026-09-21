@@ -164,6 +164,16 @@ def init_db():
             if col not in existing_t:
                 conn.execute(f"ALTER TABLE tenants ADD COLUMN {col} {typedef}")
 
+        # One-time data migrations, gated on PRAGMA user_version.
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            # "Not found" rows written before failed FBA lookups (TLS errors,
+            # timeouts) were told apart from real misses cannot be trusted — and
+            # FBA data now survives rescans, so they would never age out on their
+            # own schedule. Re-queue them once.
+            conn.execute("UPDATE devices SET fba_scanned_at = NULL WHERE fba_error = 1")
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+
         # Config-aware CVE applicability. Keyed by device NAME, not devices.id:
         # save_tenant_results() deletes and re-inserts device rows on every scan,
         # and configs / verdicts must survive that.
@@ -678,6 +688,12 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> Non
         _connect().commit()
 
 
+def get_device_ids_by_name(resource_name: str) -> list[int]:
+    return [r["id"] for r in _connect().execute(
+        "SELECT id FROM devices WHERE resource_name = ? COLLATE NOCASE", (resource_name,)
+    )]
+
+
 def get_device_fba_by_name(resource_name: str) -> dict | None:
     """Return stored FBA data for a device by its resource_name."""
     import json as _json
@@ -695,8 +711,10 @@ def get_device_fba_by_name(resource_name: str) -> dict | None:
     # indistinguishable from "not_found" (all three have fba_analyzed falsy).
     if d.get("fba_analyzed"):
         d["fba_state"] = "analyzed"
+    elif d.get("fba_lookup_failed_at"):      # cleared by any lookup that gets an answer
+        d["fba_state"] = "lookup_failed"
     elif not d.get("fba_scanned_at"):
-        d["fba_state"] = "lookup_failed" if d.get("fba_lookup_failed_at") else "pending"
+        d["fba_state"] = "pending"
     elif d.get("fba_error"):
         d["fba_state"] = "not_found"
     else:

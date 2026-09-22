@@ -12,6 +12,7 @@ Lookup strategy per device:
 
 import asyncio
 import os
+import time
 import httpx
 
 FBA_BASE_URL = os.getenv("FBA_BASE_URL", "https://gia-ai.gt-t.net/api/fba")
@@ -26,15 +27,61 @@ FBA_VERIFY_SSL = (False if _verify_env.lower() in ("false", "0", "no")
                   else True if _verify_env.lower() in ("true", "1", "yes", "")
                   else _verify_env)
 
-# Most recent request failure, for the enrichment worker's log line. Lookups
-# used to fail silently — a TLS or auth problem looked exactly like "FBA has no
-# config for any device".
-last_error: str | None = None
+# FBA_DEBUG=true logs every request to FBA (method, URL, status or exception,
+# latency) — the way to see what is actually happening on the GIA API.
+FBA_DEBUG = os.getenv("FBA_DEBUG", "false").lower() in ("1", "true", "yes")
+
+# Live counters for every request made to FBA, exposed by
+# GET /api/config-applicability/status. Lookups used to fail silently — a TLS
+# or auth problem looked exactly like "FBA has no config for any device".
+stats = {
+    "requests": 0,
+    "http_2xx": 0,
+    "http_404": 0,
+    "http_other": 0,
+    "exceptions": 0,
+    "last_error": None,
+    "last_error_at": None,
+    "last_ok_at": None,
+}
+# The enrichment worker's current run (done/total/found/not_found/failed).
+progress: dict = {}
+last_error: str | None = None   # kept as an alias of stats["last_error"]
 
 
 def _note_error(err) -> None:
     global last_error
     last_error = f"{type(err).__name__}: {err}"[:300] if isinstance(err, Exception) else str(err)[:300]
+    stats["last_error"] = last_error
+    stats["last_error_at"] = time.time()
+
+
+async def _get(client: httpx.AsyncClient, url: str, *, params=None, timeout=None) -> httpx.Response | None:
+    """Every FBA request goes through here: counted, optionally logged, and a
+    transport failure (TLS, DNS, timeout) is recorded and returned as None."""
+    stats["requests"] += 1
+    t0 = time.time()
+    shown = url.replace(FBA_BASE_URL, "") + (
+        "?" + "&".join(f"{k}={v}" for k, v in params.items()) if params else "")
+    try:
+        resp = await client.get(url, params=params, headers=_HEADERS, timeout=timeout or FBA_TIMEOUT)
+    except Exception as e:
+        stats["exceptions"] += 1
+        _note_error(e)
+        if FBA_DEBUG:
+            print(f"    FBA → GET {shown} → {type(e).__name__}: {str(e)[:160]} ({(time.time() - t0) * 1000:.0f}ms)")
+        return None
+    if 200 <= resp.status_code < 300:
+        stats["http_2xx"] += 1
+        stats["last_ok_at"] = time.time()
+    elif resp.status_code == 404:
+        stats["http_404"] += 1
+    else:
+        stats["http_other"] += 1
+        _note_error(f"HTTP {resp.status_code} from {shown}: {resp.text[:120]}")
+    if FBA_DEBUG:
+        print(f"    FBA → GET {shown} → HTTP {resp.status_code} ({(time.time() - t0) * 1000:.0f}ms)")
+    return resp
 
 _HEADERS = {"X-API-Key": FBA_API_KEY}
 
@@ -97,32 +144,31 @@ async def _fetch_one(
     async with semaphore:
         # ── 1. Direct lookup (fast path) ──────────────────────────────────
         for name in _name_variants(device_name):
-            url = f"{FBA_BASE_URL}/inventory/{name}.conf"
-            try:
-                resp = await client.get(url, headers=_HEADERS, timeout=FBA_TIMEOUT)
-                if resp.status_code == 200:
-                    body = resp.json()
-                    if body.get("success") and body.get("data"):
-                        return device_name, body["data"]
-                elif resp.status_code != 404:
-                    failed = True
-                    _note_error(f"HTTP {resp.status_code} from {url}")
-            except Exception as e:
+            resp = await _get(client, f"{FBA_BASE_URL}/inventory/{name}.conf")
+            if resp is None:
                 failed = True
-                _note_error(e)
+                continue
+            if resp.status_code == 200:
+                try:
+                    body = resp.json()
+                except Exception as e:
+                    failed = True
+                    _note_error(e)
+                    continue
+                if body.get("success") and body.get("data"):
+                    return device_name, body["data"]
+            elif resp.status_code != 404:
+                failed = True
 
         # ── 2. Search fallback (handles HA suffixes: -A/-B, -1/-2, -pri/-sec) ──
         for query in _name_variants(device_name):
             try:
-                resp = await client.get(
-                    f"{FBA_BASE_URL}/inventory",
-                    params={"firewall": query},
-                    headers=_HEADERS,
-                    timeout=FBA_TIMEOUT,
-                )
+                resp = await _get(client, f"{FBA_BASE_URL}/inventory", params={"firewall": query})
+                if resp is None:
+                    failed = True
+                    continue
                 if resp.status_code != 200:
                     failed = True
-                    _note_error(f"HTTP {resp.status_code} from inventory search")
                     continue
                 body = resp.json()
                 items = body.get("data", {}).get("items") or []
@@ -144,19 +190,19 @@ async def _fetch_one(
                     detail_url = item.get("url")
                     if not detail_url:
                         continue
+                    dr = await _get(client, detail_url)
+                    if dr is None or dr.status_code != 200:
+                        failed = True
+                        continue
                     try:
-                        dr = await client.get(detail_url, headers=_HEADERS, timeout=FBA_TIMEOUT)
-                        if dr.status_code == 200:
-                            db = dr.json()
-                            if db.get("success") and db.get("data"):
-                                details.append(db["data"])
-                                filenames.append(item.get("filename", ""))
-                        else:
-                            failed = True
-                            _note_error(f"HTTP {dr.status_code} from {detail_url}")
+                        db = dr.json()
                     except Exception as e:
                         failed = True
                         _note_error(e)
+                        continue
+                    if db.get("success") and db.get("data"):
+                        details.append(db["data"])
+                        filenames.append(item.get("filename", ""))
 
                 if not details:
                     continue
@@ -204,9 +250,8 @@ async def fetch_raw_config(config_url: str) -> str | None:
         return None
     try:
         async with httpx.AsyncClient(verify=FBA_VERIFY_SSL) as client:
-            resp = await client.get(config_url, headers=_HEADERS, timeout=max(FBA_TIMEOUT, 60))
-        if resp.status_code != 200:
-            _note_error(f"HTTP {resp.status_code} from {config_url}")
+            resp = await _get(client, config_url, timeout=max(FBA_TIMEOUT, 60))
+        if resp is None or resp.status_code != 200:
             return None
         body = resp.json()
         raw = (body.get("data") or {}).get("raw_config") if body.get("success") else None

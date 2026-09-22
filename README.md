@@ -99,6 +99,13 @@ certificate verification and no device gets config data. Set `FBA_VERIFY_SSL` to
 of a CA bundle containing that root (preferred — mount it into the container), or to
 `false` to skip verification.
 
+To see what is happening on the FBA (GIA) API: `FBA_DEBUG=true` logs every request with its
+status or exception and latency, the enrichment worker's progress line reports found / not in
+FBA / failed counts plus the last error, and `GET /api/config-applicability/status` exposes
+`fba_requests` (live request counters) and `fba_run` (the current enrichment run). When every
+lookup in a batch fails the run aborts immediately with the reason instead of grinding through
+the whole estate.
+
 A lookup that _fails_ (TLS, timeout, 5xx) is kept separate from one where FBA answers "no
 such device": failures are logged, never overwrite existing data, and are retried after
 `FBA_RETRY_HOURS` (default 1) rather than being cached as "not found" for

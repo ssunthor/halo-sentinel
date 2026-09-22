@@ -2290,6 +2290,9 @@ async def fba_enrichment_worker():
             found_count   = 0
             failed_count  = 0
             CHUNK_SIZE    = 200
+            fba_client.progress = {"total": total, "done": 0, "found": 0, "not_found": 0,
+                                   "failed": 0, "started_at": scanned_at, "aborted": None}
+            abort_reason  = None
 
             print(f"🔍 FBA: enriching {total} device(s) in chunks of {CHUNK_SIZE} (concurrency={FBA_MAX_CONCURRENCY})")
 
@@ -2303,6 +2306,7 @@ async def fba_enrichment_worker():
 
                 chunk = device_names[chunk_start:chunk_start + CHUNK_SIZE]
                 chunk_results = await fba_client.fetch_configs_chunk(chunk, FBA_MAX_CONCURRENCY)
+                chunk_failed  = 0
 
                 # Write this chunk's results immediately so they appear in the UI
                 for name, data in chunk_results.items():
@@ -2318,6 +2322,7 @@ async def fba_enrichment_worker():
                             thread_pool, db.mark_fba_lookup_failed, device_id, scanned_at
                         )
                         failed_count += 1
+                        chunk_failed += 1
                         continue
                     await loop.run_in_executor(
                         thread_pool, db.update_device_fba, device_id, data, scanned_at
@@ -2326,11 +2331,36 @@ async def fba_enrichment_worker():
                         found_count += 1
 
                 pct = round(100 * done_count / total)
-                print(f"  FBA: {done_count}/{total} ({pct}%) — {found_count} configs found so far")
+                not_found = done_count - found_count - failed_count
+                fba_client.progress.update(done=done_count, found=found_count,
+                                           not_found=not_found, failed=failed_count)
+                line = (f"  FBA: {done_count}/{total} ({pct}%) — {found_count} found, "
+                        f"{not_found} not in FBA, {failed_count} lookups failed")
+                if chunk_failed:
+                    line += f" | last error: {fba_client.last_error}"
+                print(line)
+
+                # Every lookup in the chunk failed: FBA is unreachable, rejecting us, or
+                # TLS is broken. Nothing later in the run will fare better — stop now
+                # instead of spending hours on 150k devices, and say why.
+                if chunk_failed == len(chunk):
+                    abort_reason = fba_client.last_error or "every lookup failed"
+                    fba_client.progress["aborted"] = abort_reason
+                    print(f"❌ FBA: aborting run — all {len(chunk)} lookups in this batch failed: {abort_reason}")
+                    if "CERTIFICATE_VERIFY_FAILED" in abort_reason:
+                        print("   → FBA's certificate is issued by the corporate CA (GICORP-ROOT-CA01); "
+                              "set FBA_VERIFY_SSL to a CA bundle containing it (or 'false').")
+                    elif "HTTP 401" in abort_reason or "HTTP 403" in abort_reason:
+                        print("   → FBA rejected the API key; check FBA_API_KEY.")
+                    print(f"   → Set FBA_DEBUG=true to log every FBA request. Retrying in {FBA_RETRY_HOURS}h.")
+                    break
 
                 # Brief yield between chunks to keep the event loop responsive
                 await asyncio.sleep(1)
 
+            if abort_reason:
+                await asyncio.sleep(FBA_RETRY_HOURS * 3600)
+                continue
             print(f"✅ FBA: complete — {done_count} processed, {found_count} configs found, "
                   f"{done_count - found_count - failed_count} not in FBA, {failed_count} lookups failed (retry in {FBA_RETRY_HOURS}h).")
             if failed_count:

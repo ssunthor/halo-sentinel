@@ -294,5 +294,7 @@ async def get_status():
         "push_enabled": bool(CONFIG_PUSH_TOKEN),
         "fba_verify_ssl": fba_client.FBA_VERIFY_SSL if isinstance(fba_client.FBA_VERIFY_SSL, bool) else "ca-bundle",
         "fba_last_error": fba_client.last_error,
+        "fba_requests": fba_client.stats,
+        "fba_run": fba_client.progress,
         **counts,
     }

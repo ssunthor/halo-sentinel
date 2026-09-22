@@ -2290,13 +2290,13 @@ async def fba_enrichment_worker():
             found_count   = 0
             failed_count  = 0
             CHUNK_SIZE    = 200
-            fba_client.progress = {"total": total, "done": 0, "found": 0, "not_found": 0,
-                                   "failed": 0, "started_at": scanned_at, "aborted": None}
             abort_reason  = None
 
             print(f"🔍 FBA: enriching {total} device(s) in chunks of {CHUNK_SIZE} (concurrency={FBA_MAX_CONCURRENCY})")
 
             scanned_at = datetime.now(timezone.utc).isoformat()
+            fba_client.progress = {"total": total, "done": 0, "found": 0, "not_found": 0,
+                                   "failed": 0, "started_at": scanned_at, "aborted": None}
 
             for chunk_start in range(0, total, CHUNK_SIZE):
                 # Pause during global scan between chunks

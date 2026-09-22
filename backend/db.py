@@ -154,6 +154,9 @@ def init_db():
             ("fba_lookup_failed_at",     "TEXT"),
             # Highest CVSS among CVEs the device config has NOT ruled out
             ("effective_severity_score", "REAL"),
+            # FBA's own last_analyzed_at for the stored audit — the listing
+            # exposes it, so a changed audit is detected without a detail fetch.
+            ("fba_source_analyzed_at",   "TEXT"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {typedef}")
@@ -623,22 +626,16 @@ def get_severity_breakdown() -> dict:
 FBA_VENDOR_SQL = "(d.platform_name LIKE 'Forti%' OR d.os LIKE 'Forti%' OR d.resource_type LIKE 'Forti%')"
 
 
-def get_devices_needing_fba_refresh(max_age_hours: int = 24, retry_hours: int = 1) -> list[dict]:
-    """Return Fortinet devices whose FBA data is absent or older than max_age_hours.
-    A device whose last lookup FAILED (as opposed to "not found") is held back
-    for retry_hours so an FBA outage doesn't turn into a tight retry loop.
-    Vulnerable devices go first — they are the ones people open."""
+def get_fortinet_devices_for_fba() -> list[dict]:
+    """Every Fortinet device with what we currently hold from FBA, vulnerable
+    first — matched locally against FBA's complete inventory listing."""
     rows = _connect().execute(f"""
-        SELECT d.id, d.resource_name, t.name AS tenant_name
+        SELECT d.id, d.resource_name, d.fba_scanned_at, d.fba_error, d.fba_analyzed,
+               d.fba_source_analyzed_at, d.is_vulnerable
         FROM devices d
-        JOIN tenants t ON d.tenant_id = t.tenant_id
         WHERE {FBA_VENDOR_SQL}
-          AND (d.fba_scanned_at IS NULL
-               OR datetime(d.fba_scanned_at) < datetime('now', ? || ' hours'))
-          AND (d.fba_lookup_failed_at IS NULL
-               OR datetime(d.fba_lookup_failed_at) < datetime('now', ? || ' hours'))
         ORDER BY d.is_vulnerable DESC, d.highest_severity_score DESC, d.resource_name ASC
-    """, (f"-{max_age_hours}", f"-{retry_hours}")).fetchall()
+    """).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -668,7 +665,8 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> boo
                 SET fba_scanned_at=?, fba_analyzed=0, fba_vulnerable=NULL,
                     fba_vuln_acl=NULL, fba_vuln_password=NULL,
                     fba_reason=NULL, fba_findings=NULL, fba_error=1,
-                    fba_config_url=NULL, fba_lookup_failed_at=NULL
+                    fba_config_url=NULL, fba_lookup_failed_at=NULL,
+                    fba_source_analyzed_at=NULL
                 WHERE id=?
             """, (scanned_at, device_id))
         else:
@@ -684,7 +682,8 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> boo
                     fba_findings=?,
                     fba_config_url=?,
                     fba_error=0,
-                    fba_lookup_failed_at=NULL
+                    fba_lookup_failed_at=NULL,
+                    fba_source_analyzed_at=?
                 WHERE id=?
             """, (
                 scanned_at,
@@ -695,6 +694,7 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> boo
                 data.get("reason"),
                 findings_json,
                 data.get("config_url"),
+                data.get("source_analyzed_at") or data.get("last_analyzed_at"),
                 device_id,
             ))
         _connect().commit()

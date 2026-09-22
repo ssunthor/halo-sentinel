@@ -407,3 +407,29 @@ def test_inventory_item_matching():
     ha = [{"filename": f} for f in ("FW-EDGE-A.conf", "FW-EDGE-B.conf", "FW-EDGE-S1.conf", "FW-EDGE2.conf")]
     assert [i["filename"] for i in fc.match_inventory_items("FW-EDGE", ha)] == ["FW-EDGE-A.conf", "FW-EDGE-B.conf"]
     assert fc.match_inventory_items("FW-EDGE", [{"filename": "OTHER.conf"}]) == []
+
+
+def test_plan_enrichment_from_listing():
+    import pytest
+    fc = pytest.importorskip("fba_client")
+    items = [
+        {"filename": "Edge-FW-01.conf", "last_analyzed_at": "2026-09-10", "url": "u1"},
+        {"filename": "HA-PAIR-A.conf", "last_analyzed_at": "2026-09-01", "url": "u2"},
+        {"filename": "HA-PAIR-B.conf", "last_analyzed_at": "2026-09-12", "url": "u3"},
+        {"filename": "HA-PAIR-S1.conf", "last_analyzed_at": "2026-09-20", "url": "u4"},   # a different device
+    ]
+    devices = [
+        {"id": 1, "resource_name": "edge-fw-01", "fba_scanned_at": None},                       # new → fetch
+        {"id": 2, "resource_name": "HA-PAIR", "fba_scanned_at": "x", "fba_error": 0,
+         "fba_source_analyzed_at": "2026-09-12"},                                              # current → nothing
+        {"id": 3, "resource_name": "HA-PAIR-S1", "fba_scanned_at": "x", "fba_error": 0,
+         "fba_source_analyzed_at": "2026-09-01"},                                              # changed → fetch
+        {"id": 4, "resource_name": "GONE-FW", "fba_scanned_at": None},                          # absent → not found
+        {"id": 5, "resource_name": "GONE-FW-2", "fba_scanned_at": "x", "fba_error": 1},         # already recorded
+    ]
+    to_fetch, not_found = fc.plan_enrichment(devices, items)
+    assert [(d["id"], [n["filename"] for n in nodes]) for d, nodes in to_fetch] == [
+        (1, ["Edge-FW-01.conf"]), (3, ["HA-PAIR-S1.conf"])]
+    assert [d["id"] for d in not_found] == [4]
+    # HA pair resolves to both nodes, and its "newest" is the max across nodes
+    assert [n["filename"] for n in fc.match_device("ha-pair", fc.index_inventory(items))] == ["HA-PAIR-A.conf", "HA-PAIR-B.conf"]

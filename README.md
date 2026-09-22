@@ -99,9 +99,13 @@ certificate verification and no device gets config data. Set `FBA_VERIFY_SSL` to
 of a CA bundle containing that root (preferred — mount it into the container), or to
 `false` to skip verification.
 
-FBA lookups are limited to Fortinet devices (FBA holds nothing else) and cost one request for
-a miss and two for a hit. All requests share one rate limiter, `FBA_RATE_LIMIT` requests per
-second (default 5), with `FBA_MAX_CONCURRENCY` (default 4) lookups in flight.
+FBA enrichment does not look devices up one at a time. Every `FBA_SYNC_MINUTES` (default 60)
+it pulls FBA's complete inventory listing (about 11 requests for ~10k configs), matches every
+Fortinet device locally (exact filename, else recognised HA-node suffixes such as `-A`/`-B`),
+and fetches the full audit only for devices whose FBA `last_analyzed_at` changed since it was
+stored. Devices absent from the listing are recorded as not in FBA at no cost. Non-Fortinet
+devices are never considered. All requests share one rate limiter, `FBA_RATE_LIMIT` requests
+per second (default 5).
 
 To see what is happening on the FBA (GIA) API: `FBA_DEBUG=true` logs every request with its
 status or exception and latency, the enrichment worker's progress line reports found / not in
@@ -112,8 +116,7 @@ the whole estate.
 
 A lookup that _fails_ (TLS, timeout, 5xx) is kept separate from one where FBA answers "no
 such device": failures are logged, never overwrite existing data, and are retried after
-`FBA_RETRY_HOURS` (default 1) rather than being cached as "not found" for
-`FBA_CACHE_HOURS`. FBA data is carried across rescans, and the device view distinguishes
+`FBA_RETRY_HOURS` (default 1) rather than being cached as "not found". FBA data is carried across rescans, and the device view distinguishes
 _not checked yet_, _lookup failed_, _not in FBA_ and _in FBA but not audited_.
 
 ## Development (split, without Docker)

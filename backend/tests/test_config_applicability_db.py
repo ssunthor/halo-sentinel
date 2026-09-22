@@ -102,11 +102,9 @@ def test_fba_data_survives_rescan_and_states():
     dev_id = db._connect().execute("SELECT id FROM devices").fetchone()["id"]
     assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "pending"
 
-    # a failed lookup is not "not found", keeps the device out of the queue for the
-    # retry window, and never clobbers good data
+    # a failed lookup is not "not found" and never clobbers good data
     db.mark_fba_lookup_failed(dev_id, "2099-01-01T00:00:00+00:00")
     assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "lookup_failed"
-    assert db.get_devices_needing_fba_refresh(24, 1) == []
 
     db.update_device_fba(dev_id, {"analyzed": True, "vulnerable": False, "findings": [{"issue": "x"}],
                                   "config_url": "https://fba/config/x.conf"}, NOW)
@@ -236,7 +234,16 @@ def test_fba_only_queries_fortinet_devices():
         {"resource_name": "ap-lobby", "platform_name": "", "os": "", "resource_type": "FortiAP-231F",
          "highest_severity_score": 0, "is_vulnerable": False, "cves": []},
     ]})
-    queued = sorted(d["resource_name"] for d in db.get_devices_needing_fba_refresh())
-    assert queued == ["Edge-FW-01", "ap-lobby"]            # model alone is enough; Cisco never queued
+    queued = sorted(d["resource_name"] for d in db.get_fortinet_devices_for_fba())
+    assert queued == ["Edge-FW-01", "ap-lobby"]            # model alone is enough; Cisco never considered
     assert db.get_device_fba_by_name("core-sw-01")["fba_state"] == "not_applicable"
     assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "pending"
+
+
+def test_source_analyzed_at_is_stored():
+    _fresh()
+    _scan(["CVE-1"])
+    [dev_id] = db.get_device_ids_by_name("Edge-FW-01")
+    db.update_device_fba(dev_id, {"analyzed": True, "source_analyzed_at": "2026-09-01T00:00:00+00:00"}, NOW)
+    [dev] = db.get_fortinet_devices_for_fba()
+    assert dev["fba_source_analyzed_at"] == "2026-09-01T00:00:00+00:00" and dev["fba_error"] == 0

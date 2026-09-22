@@ -3,15 +3,24 @@ FBA (Firewall Baseline Analysis) API client.
 Fetches device configuration analysis from the FBA API and caches results
 in SQLite so the API is only hit when data is stale (>24h).
 
-Lookup strategy per device — one request for a miss, two for a hit:
-  1. GET /inventory?firewall={name} (case-insensitive substring search on
-     FBA's side). An item whose filename is exactly {name}.conf wins; otherwise
-     items named {name} + a recognised HA suffix (-A/-B, -1/-2, -pri/-sec, …)
-     are taken as the nodes of an HA pair. Anything else sharing the prefix is
-     a different device and is ignored.
-  2. GET the detail URL of each matching item (the listing lacks findings).
-     Results from multiple HA nodes are merged (worst-case: vulnerable if any
-     node is).
+How the FBA external API behaves (fortibleed-analyzer/rest_api/routers/external.py):
+
+  GET /inventory?limit=1000&offset=N   the whole inventory, ordered by filename,
+                                       1000 per page; items carry analyzed /
+                                       vulnerable / last_analyzed_at but not
+                                       findings. ~10k configs → 11 requests.
+  GET /inventory?firewall=X            filename ILIKE '%X%' (substring, any case)
+  GET /inventory/{filename}            exact filename; full audit incl. findings
+  GET /config/{filename}               raw config text
+
+Enrichment therefore does NOT look devices up one by one. Each cycle it pulls
+the complete listing (plan_enrichment), matches every Fortinet device locally
+(exact filename, else recognised HA-node suffixes), and fetches the detail only
+for devices whose last_analyzed_at changed since we last stored it. A device
+absent from the complete listing is a trustworthy "not found" at zero cost.
+
+_fetch_one / fetch_configs_chunk remain for the on-demand re-check endpoint:
+one search request for a miss, plus one detail per HA node for a hit.
 
 All requests go through one global rate limiter (FBA_RATE_LIMIT requests per
 second, default 5) so the enrichment run cannot flood the GIA API.
@@ -143,6 +152,110 @@ def match_inventory_items(device_name: str, items: list) -> list:
             if _HA_SUFFIX.match(fname[len(stem):-len(".conf")]):
                 nodes.append(i)
     return nodes
+
+
+_HA_SUFFIXES = ("-a", "-b", "-1", "-2", "-pri", "-sec", "-primary", "-secondary",
+                "-master", "-slave", "-node1", "-node2",
+                "_a", "_b", "_1", "_2", "_pri", "_sec", "_primary", "_secondary",
+                "_master", "_slave", "_node1", "_node2")
+
+
+async def list_all_inventory(client: httpx.AsyncClient | None = None) -> list | None:
+    """Every item in FBA's inventory (≈11 paged requests). None if any page
+    could not be fetched — a partial listing must never be treated as complete,
+    or absent devices would be recorded as "not found"."""
+    async def run(c):
+        items, offset, total = [], 0, None
+        while total is None or offset < total:
+            resp = await _get(c, f"{FBA_BASE_URL}/inventory", params={"limit": 1000, "offset": offset},
+                              timeout=max(FBA_TIMEOUT, 60))
+            if resp is None or resp.status_code != 200:
+                return None
+            try:
+                data = resp.json()["data"]
+            except Exception as e:
+                _note_error(e)
+                return None
+            page = data.get("items") or []
+            total = int(data.get("total") or 0)
+            items.extend(page)
+            if not page:
+                break
+            offset += len(page)
+        return items
+    if client is not None:
+        return await run(client)
+    async with httpx.AsyncClient(verify=FBA_VERIFY_SSL) as c:
+        return await run(c)
+
+
+def index_inventory(items: list) -> dict:
+    """{lowercased filename stem: item}."""
+    out = {}
+    for i in items:
+        fname = (i.get("filename") or "")
+        if fname.lower().endswith(".conf"):
+            out[fname[:-5].lower()] = i
+    return out
+
+
+def match_device(device_name: str, index: dict) -> list:
+    """Items that ARE this device (see match_inventory_items), via dict lookups."""
+    stem = device_name.lower()
+    exact = index.get(stem)
+    if exact:
+        return [exact]
+    return [index[stem + suf] for suf in _HA_SUFFIXES if stem + suf in index]
+
+
+def plan_enrichment(devices: list, items: list) -> tuple[list, list]:
+    """Decide, from the complete listing, what each of our devices needs.
+
+    devices: [{id, resource_name, fba_source_analyzed_at, fba_scanned_at, fba_error}]
+    Returns (to_fetch, not_found):
+      to_fetch  [(device, [matching items])] — in FBA and its audit is new or
+                changed since we stored it (or we hold nothing yet)
+      not_found [device]                     — absent from FBA and not already
+                recorded as such
+    Devices already up to date need no request at all.
+    """
+    index = index_inventory(items)
+    to_fetch, not_found = [], []
+    for dev in devices:
+        nodes = match_device(dev["resource_name"], index)
+        if not nodes:
+            if not dev.get("fba_scanned_at") or not dev.get("fba_error"):
+                not_found.append(dev)
+            continue
+        newest = max((n.get("last_analyzed_at") or "") for n in nodes)
+        if not dev.get("fba_scanned_at") or (dev.get("fba_source_analyzed_at") or "") != newest:
+            to_fetch.append((dev, nodes))
+    return to_fetch, not_found
+
+
+async def fetch_details(client: httpx.AsyncClient, nodes: list) -> dict | None | object:
+    """Full audit for one device from its listing item(s). None = FBA answered
+    but no detail (deleted between listing and fetch); LOOKUP_FAILED on error."""
+    details, filenames = [], []
+    for item in nodes:
+        resp = await _get(client, item.get("url") or f"{FBA_BASE_URL}/inventory/{item['filename']}")
+        if resp is None or resp.status_code >= 500:
+            return LOOKUP_FAILED
+        if resp.status_code != 200:
+            continue
+        try:
+            body = resp.json()
+        except Exception as e:
+            _note_error(e)
+            return LOOKUP_FAILED
+        if body.get("success") and body.get("data"):
+            details.append(body["data"])
+            filenames.append(item.get("filename", ""))
+    if not details:
+        return None
+    data = details[0] if len(details) == 1 else _merge_results(details, filenames)
+    data["source_analyzed_at"] = max((n.get("last_analyzed_at") or "") for n in nodes)
+    return data
 
 
 def _merge_results(details: list, filenames: list) -> dict:

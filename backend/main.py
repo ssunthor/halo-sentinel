@@ -76,9 +76,8 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "password")
 
 DAILY_SCAN_TIME_UTC  = os.getenv("DAILY_SCAN_TIME_UTC",  "02:00")
 FBA_ENABLED          = os.getenv("FBA_ENABLED", "true").lower() not in ("0", "false", "no")
-FBA_MAX_CONCURRENCY  = int(os.getenv("FBA_MAX_CONCURRENCY", "4"))   # in-flight lookups; FBA_RATE_LIMIT caps req/s
-FBA_CACHE_HOURS      = int(os.getenv("FBA_CACHE_HOURS", "24"))
 FBA_RETRY_HOURS      = int(os.getenv("FBA_RETRY_HOURS", "1"))   # after a FAILED lookup (not a "not found")
+FBA_SYNC_MINUTES     = int(os.getenv("FBA_SYNC_MINUTES", "60"))  # how often to re-pull FBA's inventory listing
 
 CACHE_DIR = "/app/cache"
 CVE_CACHE_FILE = os.path.join(CACHE_DIR, "cve_cache.json")
@@ -2258,10 +2257,13 @@ async def daily_scan_scheduler():
 
 async def fba_enrichment_worker():
     """
-    Background task: continuously enrich devices with FBA config-analysis data.
-    Fetches all devices whose FBA data is absent or stale (>FBA_CACHE_HOURS),
-    calls the FBA API in batches, and stores results in the DB.
-    Pauses while a global scan is running to avoid DB contention.
+    Background task: keep every Fortinet device's FBA audit data current.
+
+    One cycle = pull FBA's complete inventory listing (≈11 requests for ~10k
+    configs), match all our Fortinet devices against it locally, then fetch
+    the full audit only for devices whose FBA last_analyzed_at changed since we
+    stored it. Devices absent from the listing are "not found" at no cost.
+    Steady state is a dozen requests per cycle. Pauses while a global scan runs.
     """
     if not FBA_ENABLED:
         print("ℹ️  FBA enrichment disabled (FBA_ENABLED=false).")
@@ -2269,115 +2271,73 @@ async def fba_enrichment_worker():
 
     print("✅ FBA enrichment worker started.")
     await asyncio.sleep(30)  # let startup settle
+    loop = asyncio.get_running_loop()
 
     while True:
         try:
-            # Pause during active global scan
             if _global_scan_state.get("status") == "running":
                 await asyncio.sleep(30)
                 continue
 
-            loop = asyncio.get_running_loop()
-            stale = await loop.run_in_executor(
-                thread_pool, db.get_devices_needing_fba_refresh, FBA_CACHE_HOURS, FBA_RETRY_HOURS
-            )
+            t0 = time.time()
+            async with httpx.AsyncClient(verify=fba_client.FBA_VERIFY_SSL) as client:
+                items = await fba_client.list_all_inventory(client)
+                if items is None:
+                    err = fba_client.last_error or "unknown error"
+                    print(f"❌ FBA: could not fetch the inventory listing — {err}"
+                          + ("  → FBA's certificate is issued by the corporate CA; set FBA_VERIFY_SSL to the CA bundle path."
+                             if "CERTIFICATE_VERIFY_FAILED" in err else "")
+                          + f"  Retrying in {FBA_RETRY_HOURS}h.")
+                    fba_client.progress = {"aborted": err, "started_at": datetime.now(timezone.utc).isoformat()}
+                    await asyncio.sleep(FBA_RETRY_HOURS * 3600)
+                    continue
 
-            if not stale:
-                await asyncio.sleep(300)  # nothing to do — check again in 5m
-                continue
+                devices = await loop.run_in_executor(thread_pool, db.get_fortinet_devices_for_fba)
+                to_fetch, not_found = fba_client.plan_enrichment(devices, items)
+                scanned_at = datetime.now(timezone.utc).isoformat()
+                fba_client.progress = {"total": len(to_fetch), "done": 0, "found": 0, "not_found": len(not_found),
+                                       "failed": 0, "listing_items": len(items), "fortinet_devices": len(devices),
+                                       "started_at": scanned_at, "aborted": None}
+                print(f"🔍 FBA: listing has {len(items)} configs; {len(devices)} Fortinet devices — "
+                      f"{len(to_fetch)} audits to fetch (new or changed), {len(not_found)} not in FBA, "
+                      f"{len(devices) - len(to_fetch) - len(not_found)} already current ({time.time() - t0:.1f}s)")
 
-            device_names  = [d["resource_name"] for d in stale]
-            id_by_name    = {d["resource_name"]: d["id"] for d in stale}
-            total         = len(device_names)
-            done_count    = 0
-            found_count   = 0
-            failed_count  = 0
-            requeued      = 0     # analyses queued for regeneration because FBA data changed
-            CHUNK_SIZE    = 200
-            abort_reason  = None
+                for dev in not_found:
+                    await loop.run_in_executor(thread_pool, db.update_device_fba, dev["id"], None, scanned_at)
 
-            print(f"🔍 FBA: enriching {total} device(s) in chunks of {CHUNK_SIZE} (concurrency={FBA_MAX_CONCURRENCY})")
-
-            scanned_at = datetime.now(timezone.utc).isoformat()
-            fba_client.progress = {"total": total, "done": 0, "found": 0, "not_found": 0,
-                                   "failed": 0, "started_at": scanned_at, "aborted": None}
-
-            for chunk_start in range(0, total, CHUNK_SIZE):
-                # Pause during global scan between chunks
-                if _global_scan_state.get("status") == "running":
-                    print("  FBA: pausing — global scan started")
-                    break
-
-                chunk = device_names[chunk_start:chunk_start + CHUNK_SIZE]
-                chunk_results = await fba_client.fetch_configs_chunk(chunk, FBA_MAX_CONCURRENCY)
-                chunk_failed  = 0
-
-                # Write this chunk's results immediately so they appear in the UI
-                for name, data in chunk_results.items():
-                    device_id = id_by_name.get(name)
-                    if device_id is None:
-                        continue
-                    done_count += 1
+                done = found = failed = requeued = 0
+                for dev, nodes in to_fetch:
+                    if _global_scan_state.get("status") == "running":
+                        print("  FBA: pausing — global scan started")
+                        break
+                    data = await fba_client.fetch_details(client, nodes)
+                    done += 1
                     if data is fba_client.LOOKUP_FAILED:
-                        # Timeout / 5xx: we learned nothing. Keep the device's existing
-                        # FBA data and retry in FBA_RETRY_HOURS — recording this as
-                        # "not found" would hide a real config for FBA_CACHE_HOURS.
-                        await loop.run_in_executor(
-                            thread_pool, db.mark_fba_lookup_failed, device_id, scanned_at
-                        )
-                        failed_count += 1
-                        chunk_failed += 1
-                        continue
-                    if await loop.run_in_executor(
-                        thread_pool, db.update_device_fba, device_id, data, scanned_at
-                    ):
-                        requeued += 1
-                    if data is not None:
-                        found_count += 1
+                        failed += 1
+                        await loop.run_in_executor(thread_pool, db.mark_fba_lookup_failed, dev["id"], scanned_at)
+                        if failed >= 20 and found == 0:
+                            print(f"❌ FBA: aborting — first {failed} detail fetches all failed: {fba_client.last_error}")
+                            fba_client.progress["aborted"] = fba_client.last_error
+                            break
+                    else:
+                        if await loop.run_in_executor(thread_pool, db.update_device_fba, dev["id"], data, scanned_at):
+                            requeued += 1
+                        if data is not None:
+                            found += 1
+                    fba_client.progress.update(done=done, found=found, failed=failed)
+                    if done % 100 == 0:
+                        print(f"  FBA: {done}/{len(to_fetch)} audits fetched — {found} found, {failed} failed"
+                              + (f" | last error: {fba_client.last_error}" if failed else ""))
 
-                pct = round(100 * done_count / total)
-                not_found = done_count - found_count - failed_count
-                fba_client.progress.update(done=done_count, found=found_count,
-                                           not_found=not_found, failed=failed_count)
-                line = (f"  FBA: {done_count}/{total} ({pct}%) — {found_count} found, "
-                        f"{not_found} not in FBA, {failed_count} lookups failed")
-                if chunk_failed:
-                    line += f" | last error: {fba_client.last_error}"
-                print(line)
-
-                # Every lookup in the chunk failed: FBA is unreachable, rejecting us, or
-                # TLS is broken. Nothing later in the run will fare better — stop now
-                # instead of spending hours on 150k devices, and say why.
-                if chunk_failed == len(chunk):
-                    abort_reason = fba_client.last_error or "every lookup failed"
-                    fba_client.progress["aborted"] = abort_reason
-                    print(f"❌ FBA: aborting run — all {len(chunk)} lookups in this batch failed: {abort_reason}")
-                    if "CERTIFICATE_VERIFY_FAILED" in abort_reason:
-                        print("   → FBA's certificate is issued by the corporate CA (GICORP-ROOT-CA01); "
-                              "set FBA_VERIFY_SSL to a CA bundle containing it (or 'false').")
-                    elif "HTTP 401" in abort_reason or "HTTP 403" in abort_reason:
-                        print("   → FBA rejected the API key; check FBA_API_KEY.")
-                    print(f"   → Set FBA_DEBUG=true to log every FBA request. Retrying in {FBA_RETRY_HOURS}h.")
-                    break
-
-                # Brief yield between chunks to keep the event loop responsive
-                await asyncio.sleep(1)
-
-            if abort_reason:
-                await asyncio.sleep(FBA_RETRY_HOURS * 3600)
-                continue
-            print(f"✅ FBA: complete — {done_count} processed, {found_count} configs found, "
-                  f"{done_count - found_count - failed_count} not in FBA, {failed_count} lookups failed (retry in {FBA_RETRY_HOURS}h); "
-                  f"{requeued} AI analyses queued for regeneration.")
-            if failed_count:
-                print(f"⚠️  FBA: last lookup error — {fba_client.last_error}"
-                      + ("  → FBA's certificate is issued by the corporate CA; set FBA_VERIFY_SSL to the CA bundle path."
-                         if "CERTIFICATE_VERIFY_FAILED" in (fba_client.last_error or "") else ""))
+            print(f"✅ FBA: cycle complete in {time.time() - t0:.0f}s — {done} audits fetched ({found} found, "
+                  f"{failed} failed), {len(not_found)} marked not in FBA, {requeued} AI analyses queued; "
+                  f"{fba_client.stats['requests']} FBA requests so far. Next cycle in {FBA_SYNC_MINUTES}m.")
 
         except Exception as e:
             print(f"❌ FBA enrichment worker error: {e}")
+            traceback.print_exc()
 
-        await asyncio.sleep(60)  # brief pause before checking for more stale devices
+        await asyncio.sleep(FBA_SYNC_MINUTES * 60)
 
 
 @app.get("/api/device/{resource_name}/fba")

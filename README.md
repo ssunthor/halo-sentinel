@@ -35,6 +35,16 @@ auth), scan schedule, and FBA settings. See the `os.getenv(...)` block near the 
 [backend/main.py](backend/main.py) for the full list, and `docker-compose.yaml` for the
 ones you'll usually set.
 
+## Version matching
+
+Candidate CVEs come from NVD's free-text `keywordSearch` ("FortiOS 7.2.13"), which returns
+any CVE whose text mentions those tokens — including ones where the version belongs to a
+different product in the same advisory. Each candidate is then checked against NVD's
+structured CPE ranges (`backend/cve_matching.py`): a CVE is dropped only when NVD lists a
+vulnerable range for the device's own product and the device's version is outside every one
+of them. A CVE with no CPE data, or none for that product, is kept. "NVD min fix" is derived
+from the same product's ranges, preferring the device's release branch.
+
 ## Config-aware CVE applicability
 
 A version match only says a device _might_ be vulnerable. When Sentinel has the device's

@@ -15,6 +15,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 import config_applicability
 import cve_applicability
+import cve_matching
 import email_report
 import fba_client
 import gia_client
@@ -400,38 +401,6 @@ def _build_nvd_query(os_name: str, os_version: str) -> str | None:
     return f"{os_name} {version_clean}" if version_clean else os_name
 
 
-def _version_key(v: str) -> tuple:
-    """Semantic version tuple for comparison. '17.9.4' → (17, 9, 4)."""
-    parts = []
-    for seg in re.split(r'[.\-_]', v or ''):
-        m = re.match(r'^(\d+)', seg)
-        if m:
-            parts.append(int(m.group(1)))
-    return tuple(parts) if parts else (0,)
-
-
-def _extract_recommended_version(cves_data: dict) -> str | None:
-    """
-    Scan NVD CPE configuration data across all CVEs and return the highest
-    versionEndExcluding (or versionEndIncluding as fallback), which represents
-    the minimum version that closes all known vulnerabilities.
-    Returns None if no structured version range data is present.
-    """
-    candidates = []
-    for item in cves_data.get("vulnerabilities", []):
-        for config in item.get("cve", {}).get("configurations", []):
-            for node in config.get("nodes", []):
-                for match in node.get("cpeMatch", []):
-                    if not match.get("vulnerable"):
-                        continue
-                    v = match.get("versionEndExcluding") or match.get("versionEndIncluding")
-                    if v and v.strip():
-                        candidates.append(v.strip())
-    if not candidates:
-        return None
-    return max(candidates, key=_version_key)
-
-
 def _parse_cve_response(cves_data: dict) -> tuple[list, float]:
     """Parse an NVD CVE response into (cve_list, highest_score)."""
     device_cves, highest = [], 0.0
@@ -543,8 +512,11 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
         print(f"      ⚠️ GIA lookup failed for '{os_name}': {gia_err}")
 
     try:
+        final_cves_data, dropped = cve_matching.filter_by_version(final_cves_data, os_name, os_version)
+        if dropped:
+            print(f"      🧹 {resource_name}: dropped {len(dropped)} CVE(s) outside NVD's version range for {os_name} {os_version}: {', '.join(dropped[:6])}{'…' if len(dropped) > 6 else ''}")
         device_cves, highest = _parse_cve_response(final_cves_data)
-        recommended_version = _extract_recommended_version(final_cves_data)
+        recommended_version = cve_matching.recommended_version(final_cves_data, os_name, os_version)
 
         partial_res = {
             "resource_name": resource_name,
@@ -927,14 +899,14 @@ async def run_global_scan():
             no_platform: list[dict] = []
             platform_names: set[str] = set()
 
-            for d in all_devices:
-                rtype = d.get("_rtype", "device")
+            def _device_os(d):
                 pinfo = d.get("platform")
                 os_name = pinfo.get("name") if pinfo else None
-                if rtype == "vm":
-                    os_version = d.get("custom_fields", {}).get("os_version")
-                else:
-                    os_version = d.get("custom_fields", {}).get("os_build")
+                field = "os_version" if d.get("_rtype", "device") == "vm" else "os_build"
+                return os_name, d.get("custom_fields", {}).get(field)
+
+            for d in all_devices:
+                os_name, os_version = _device_os(d)
 
                 query = _build_nvd_query(os_name, os_version)
                 if query:
@@ -1061,8 +1033,13 @@ async def run_global_scan():
 
             for query, devs in combo_map.items():
                 cves_data = nvd_results.get(query, {"vulnerabilities": []})
+                # Every device in a combo produced the same query, hence the same
+                # product and x.y.z version — the first one stands for the group.
+                os_name, os_version = _device_os(devs[0])
+                cves_data, dropped = cve_matching.filter_by_version(cves_data, os_name, os_version)
+                _global_scan_state["cves_dropped_by_version"] = _global_scan_state.get("cves_dropped_by_version", 0) + len(dropped)
                 device_cves, highest = _parse_cve_response(cves_data)
-                recommended_version = _extract_recommended_version(cves_data)
+                recommended_version = cve_matching.recommended_version(cves_data, os_name, os_version)
                 for d in devs:
                     tenant = d.get("tenant") or {}
                     tid = str(tenant.get("id", ""))

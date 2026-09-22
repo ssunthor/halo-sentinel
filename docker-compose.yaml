@@ -26,6 +26,11 @@ services:
       # LLM_CLIENT_SECRET: ''
       DAILY_SCAN_TIME_UTC: '02:00'
       FBA_ENABLED: 'true'
+      # FBA's cert is issued by the corporate CA: mount a CA bundle and point this at it, or set 'false'
+      # FBA_VERIFY_SSL: '/app/certs/gicorp-ca.pem'
+      # --- config-aware CVE applicability (see README / backend/config_applicability.py) ---
+      CFG_APPLICABILITY_ENABLED: 'true'
+      # CONFIG_PUSH_TOKEN: ''     # shared secret Halo instances use to push device configs; push is off while unset
     restart: unless-stopped
 
 volumes:

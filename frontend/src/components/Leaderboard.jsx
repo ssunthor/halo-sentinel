@@ -1089,6 +1089,14 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
                         <span className={`text-base font-black font-mono ${scoreColor(row.max_score)}`}>
                           {(row.max_score || 0).toFixed(1)}
                         </span>
+                        {row.effective_max_score != null && row.effective_max_score < row.max_score && (
+                          <div
+                            className={`text-[10px] font-mono font-bold ${scoreColor(row.effective_max_score)}`}
+                            title="Effective score: ignores CVEs that device configurations have ruled out (feature not enabled / already mitigated). Raw CVSS is shown above."
+                          >
+                            <span className="text-gray-500 font-normal">effective </span>{row.effective_max_score.toFixed(1)}
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         {row.risk_posture ? (

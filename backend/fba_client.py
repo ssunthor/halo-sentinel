@@ -3,13 +3,15 @@ FBA (Firewall Baseline Analysis) API client.
 Fetches device configuration analysis from the FBA API and caches results
 in SQLite so the API is only hit when data is stale (>24h).
 
-Lookup strategy per device (at most 2 requests for a miss):
-  1. Direct GET /inventory/{name}.conf — exact name only (this endpoint is
-     case-sensitive, but FBA files are named after the NetBox device name).
-  2. Fallback: one GET /inventory?firewall={name} search (case-insensitive on
-     FBA's side), then fetch detail for each matching item — handles HA pairs
-     where FBA appends -A/-B/-1/-2/-pri/-sec and any name-case drift. Results
-     from multiple nodes are merged (worst-case: vulnerable if any node is).
+Lookup strategy per device — one request for a miss, two for a hit:
+  1. GET /inventory?firewall={name} (case-insensitive substring search on
+     FBA's side). An item whose filename is exactly {name}.conf wins; otherwise
+     items named {name} + a recognised HA suffix (-A/-B, -1/-2, -pri/-sec, …)
+     are taken as the nodes of an HA pair. Anything else sharing the prefix is
+     a different device and is ignored.
+  2. GET the detail URL of each matching item (the listing lacks findings).
+     Results from multiple HA nodes are merged (worst-case: vulnerable if any
+     node is).
 
 All requests go through one global rate limiter (FBA_RATE_LIMIT requests per
 second, default 5) so the enrichment run cannot flood the GIA API.
@@ -17,6 +19,7 @@ second, default 5) so the enrichment run cannot flood the GIA API.
 
 import asyncio
 import os
+import re
 import time
 import httpx
 
@@ -121,14 +124,25 @@ _HEADERS = {"X-API-Key": FBA_API_KEY}
 LOOKUP_FAILED = object()
 
 
-def _name_variants(name: str) -> list:
-    """Return name variants to try in order (exact → lowercase → uppercase)."""
-    variants = [name]
-    if name != name.lower():
-        variants.append(name.lower())
-    if name != name.upper():
-        variants.append(name.upper())
-    return variants
+_HA_SUFFIX = re.compile(r"^[-_](?:a|b|1|2|pri|sec|primary|secondary|master|slave|node[12])$", re.I)
+
+
+def match_inventory_items(device_name: str, items: list) -> list:
+    """Pick the listing items that ARE this device: the exact filename if
+    present, else the device's HA nodes. `CPE-X-1.conf` must not swallow
+    `CPE-X-1-S1.conf` when both are separate NetBox devices."""
+    want = f"{device_name}.conf".lower()
+    exact = [i for i in items if (i.get("filename") or "").lower() == want]
+    if exact:
+        return exact[:1]
+    stem = device_name.lower()
+    nodes = []
+    for i in items:
+        fname = (i.get("filename") or "").lower()
+        if fname.startswith(stem) and fname.endswith(".conf"):
+            if _HA_SUFFIX.match(fname[len(stem):-len(".conf")]):
+                nodes.append(i)
+    return nodes
 
 
 def _merge_results(details: list, filenames: list) -> dict:
@@ -172,23 +186,8 @@ async def _fetch_one(
     """
     failed = False   # any request errored → a miss is not a trustworthy "not found"
     async with semaphore:
-        # ── 1. Direct lookup (fast path, exact name) ──────────────────────
-        resp = await _get(client, f"{FBA_BASE_URL}/inventory/{device_name}.conf")
-        if resp is None:
-            failed = True
-        elif resp.status_code == 200:
-            try:
-                body = resp.json()
-                if body.get("success") and body.get("data"):
-                    return device_name, body["data"]
-            except Exception as e:
-                failed = True
-                _note_error(e)
-        elif resp.status_code != 404:
-            failed = True
-
-        # ── 2. Search fallback (handles HA suffixes: -A/-B, -1/-2, -pri/-sec) ──
-        # FBA's search is case-insensitive, so one query covers every name case.
+        # One case-insensitive search finds the exact file and any HA nodes;
+        # a direct /inventory/{name}.conf GET would only add a 404 per miss.
         for query in (device_name,):
             try:
                 resp = await _get(client, f"{FBA_BASE_URL}/inventory", params={"firewall": query})
@@ -201,13 +200,7 @@ async def _fetch_one(
                 body = resp.json()
                 items = body.get("data", {}).get("items") or []
 
-                # Only accept items whose filename actually starts with our query
-                # (prevents false positives if the API does fuzzy matching)
-                q_upper = query.upper()
-                items = [
-                    i for i in items
-                    if i.get("filename", "").upper().startswith(q_upper)
-                ]
+                items = match_inventory_items(device_name, items)
                 if not items:
                     continue
 

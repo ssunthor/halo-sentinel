@@ -392,3 +392,18 @@ def test_rate_limiter_spaces_requests():
         return time.monotonic() - t0
     elapsed = asyncio.run(run())
     assert elapsed >= 9 * 0.02 - 0.005      # 10 requests need ≥ 9 gaps
+
+
+def test_inventory_item_matching():
+    import pytest
+    fc = pytest.importorskip("fba_client")
+    items = [{"filename": f} for f in (
+        "CPE-AMERS3-2126260-12061148.conf", "CPE-AMERS3-2126260-12061148-S1.conf",
+        "cpe-amers3-2126260-12061148-B.conf", "CPE-AMERS3-2126260-120611480.conf")]
+    # exact filename wins, siblings that merely share the prefix are ignored
+    got = [i["filename"] for i in fc.match_inventory_items("cpe-amers3-2126260-12061148", items)]
+    assert got == ["CPE-AMERS3-2126260-12061148.conf"]
+    # no exact file → recognised HA suffixes only
+    ha = [{"filename": f} for f in ("FW-EDGE-A.conf", "FW-EDGE-B.conf", "FW-EDGE-S1.conf", "FW-EDGE2.conf")]
+    assert [i["filename"] for i in fc.match_inventory_items("FW-EDGE", ha)] == ["FW-EDGE-A.conf", "FW-EDGE-B.conf"]
+    assert fc.match_inventory_items("FW-EDGE", [{"filename": "OTHER.conf"}]) == []

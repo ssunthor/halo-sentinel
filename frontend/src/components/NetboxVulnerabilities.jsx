@@ -236,6 +236,7 @@ const FBA_EMPTY_STATE = {
   lookup_failed: 'The FBA lookup for this device failed (FBA unreachable or returned an error). It is retried automatically.',
   not_analyzed: "FBA holds this device's configuration but has not audited it yet.",
   not_found: 'No configuration profile found for this device in the FBA system.',
+  not_applicable: 'FBA audits Fortinet devices only — this device is not looked up.',
 };
 
 const ConfigAnalysisSection = ({ deviceName, apiBase }) => {

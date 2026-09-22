@@ -76,7 +76,7 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "password")
 
 DAILY_SCAN_TIME_UTC  = os.getenv("DAILY_SCAN_TIME_UTC",  "02:00")
 FBA_ENABLED          = os.getenv("FBA_ENABLED", "true").lower() not in ("0", "false", "no")
-FBA_MAX_CONCURRENCY  = int(os.getenv("FBA_MAX_CONCURRENCY", "20"))
+FBA_MAX_CONCURRENCY  = int(os.getenv("FBA_MAX_CONCURRENCY", "4"))   # in-flight lookups; FBA_RATE_LIMIT caps req/s
 FBA_CACHE_HOURS      = int(os.getenv("FBA_CACHE_HOURS", "24"))
 FBA_RETRY_HOURS      = int(os.getenv("FBA_RETRY_HOURS", "1"))   # after a FAILED lookup (not a "not found")
 

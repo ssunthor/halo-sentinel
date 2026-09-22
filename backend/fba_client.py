@@ -3,11 +3,16 @@ FBA (Firewall Baseline Analysis) API client.
 Fetches device configuration analysis from the FBA API and caches results
 in SQLite so the API is only hit when data is stale (>24h).
 
-Lookup strategy per device:
-  1. Direct GET /inventory/{name}.conf (exact, lowercase, uppercase variants)
-  2. Fallback: GET /inventory?firewall={name} search, then fetch detail for each
-     matching item — handles HA pairs where FBA appends -A/-B/-1/-2/-pri/-sec.
-     Results from multiple nodes are merged (worst-case: vulnerable if any node is).
+Lookup strategy per device (at most 2 requests for a miss):
+  1. Direct GET /inventory/{name}.conf — exact name only (this endpoint is
+     case-sensitive, but FBA files are named after the NetBox device name).
+  2. Fallback: one GET /inventory?firewall={name} search (case-insensitive on
+     FBA's side), then fetch detail for each matching item — handles HA pairs
+     where FBA appends -A/-B/-1/-2/-pri/-sec and any name-case drift. Results
+     from multiple nodes are merged (worst-case: vulnerable if any node is).
+
+All requests go through one global rate limiter (FBA_RATE_LIMIT requests per
+second, default 5) so the enrichment run cannot flood the GIA API.
 """
 
 import asyncio
@@ -18,6 +23,11 @@ import httpx
 FBA_BASE_URL = os.getenv("FBA_BASE_URL", "https://gia-ai.gt-t.net/api/fba")
 FBA_API_KEY  = os.getenv("FBA_API_KEY",  "6PSYFpBW4Ax48V2CNpXuid1679tTtMKk")
 FBA_TIMEOUT  = float(os.getenv("FBA_TIMEOUT_SECONDS", "15"))
+FBA_RATE_LIMIT = float(os.getenv("FBA_RATE_LIMIT", "5"))   # requests per second, all lookups combined
+
+if not os.getenv("FBA_API_KEY"):
+    print("⚠️  FBA_API_KEY is not set — using the key baked into fba_client.py. "
+          "Set it in the environment and rotate the baked-in key.")
 
 # FBA's certificate is issued by the corporate CA (GICORP-ROOT-CA01), which is
 # not in httpx's default (certifi) bundle. Set FBA_VERIFY_SSL to the CA bundle
@@ -56,9 +66,29 @@ def _note_error(err) -> None:
     stats["last_error_at"] = time.time()
 
 
+_rate_lock = asyncio.Lock()
+_next_slot = 0.0
+
+
+async def _throttle() -> None:
+    """Global token gate: at most FBA_RATE_LIMIT requests/second across every
+    concurrent lookup, by spacing request start times 1/rate apart."""
+    global _next_slot
+    if FBA_RATE_LIMIT <= 0:
+        return
+    async with _rate_lock:
+        now = time.monotonic()
+        wait = _next_slot - now
+        _next_slot = max(now, _next_slot) + 1.0 / FBA_RATE_LIMIT
+    if wait > 0:
+        await asyncio.sleep(wait)
+
+
 async def _get(client: httpx.AsyncClient, url: str, *, params=None, timeout=None) -> httpx.Response | None:
-    """Every FBA request goes through here: counted, optionally logged, and a
-    transport failure (TLS, DNS, timeout) is recorded and returned as None."""
+    """Every FBA request goes through here: rate-limited, counted, optionally
+    logged, and a transport failure (TLS, DNS, timeout) is recorded and
+    returned as None."""
+    await _throttle()
     stats["requests"] += 1
     t0 = time.time()
     shown = url.replace(FBA_BASE_URL, "") + (
@@ -142,26 +172,24 @@ async def _fetch_one(
     """
     failed = False   # any request errored → a miss is not a trustworthy "not found"
     async with semaphore:
-        # ── 1. Direct lookup (fast path) ──────────────────────────────────
-        for name in _name_variants(device_name):
-            resp = await _get(client, f"{FBA_BASE_URL}/inventory/{name}.conf")
-            if resp is None:
-                failed = True
-                continue
-            if resp.status_code == 200:
-                try:
-                    body = resp.json()
-                except Exception as e:
-                    failed = True
-                    _note_error(e)
-                    continue
+        # ── 1. Direct lookup (fast path, exact name) ──────────────────────
+        resp = await _get(client, f"{FBA_BASE_URL}/inventory/{device_name}.conf")
+        if resp is None:
+            failed = True
+        elif resp.status_code == 200:
+            try:
+                body = resp.json()
                 if body.get("success") and body.get("data"):
                     return device_name, body["data"]
-            elif resp.status_code != 404:
+            except Exception as e:
                 failed = True
+                _note_error(e)
+        elif resp.status_code != 404:
+            failed = True
 
         # ── 2. Search fallback (handles HA suffixes: -A/-B, -1/-2, -pri/-sec) ──
-        for query in _name_variants(device_name):
+        # FBA's search is case-insensitive, so one query covers every name case.
+        for query in (device_name,):
             try:
                 resp = await _get(client, f"{FBA_BASE_URL}/inventory", params={"firewall": query})
                 if resp is None:

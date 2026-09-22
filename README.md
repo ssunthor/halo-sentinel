@@ -99,6 +99,10 @@ certificate verification and no device gets config data. Set `FBA_VERIFY_SSL` to
 of a CA bundle containing that root (preferred — mount it into the container), or to
 `false` to skip verification.
 
+FBA lookups are limited to Fortinet devices (FBA holds nothing else) and cost at most two
+requests per device. All requests share one rate limiter, `FBA_RATE_LIMIT` requests per
+second (default 5), with `FBA_MAX_CONCURRENCY` (default 4) lookups in flight.
+
 To see what is happening on the FBA (GIA) API: `FBA_DEBUG=true` logs every request with its
 status or exception and latency, the enrichment worker's progress line reports found / not in
 FBA / failed counts plus the last error, and `GET /api/config-applicability/status` exposes

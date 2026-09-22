@@ -378,3 +378,17 @@ def test_fba_fingerprint():
     assert fp and fp == ca.fba_fingerprint({**a, "fba_findings": json.dumps(a["fba_findings"])})
     assert ca.fba_fingerprint({**a, "fba_vuln_acl": 1}) != fp
     assert ca.fba_fingerprint({**a, "fba_findings": []}) != fp
+
+
+def test_rate_limiter_spaces_requests():
+    import asyncio, time
+    import pytest
+    fc = pytest.importorskip("fba_client")     # needs httpx; skipped in a bare checkout
+    fc.FBA_RATE_LIMIT = 50.0        # 20ms apart
+    fc._next_slot = 0.0
+    async def run():
+        t0 = time.monotonic()
+        await asyncio.gather(*(fc._throttle() for _ in range(10)))
+        return time.monotonic() - t0
+    elapsed = asyncio.run(run())
+    assert elapsed >= 9 * 0.02 - 0.005      # 10 requests need ≥ 9 gaps

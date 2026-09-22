@@ -224,3 +224,19 @@ def test_fba_result_change_queues_analysis_regeneration():
     audit["findings"].append({"severity": "CRITICAL", "category": "WEAK_PASSWORD", "issue": "md5"})
     assert db.update_device_fba(dev_id, audit, NOW) is True
     assert len(db.get_devices_needing_llm("t1")) == 1
+
+
+def test_fba_only_queries_fortinet_devices():
+    _fresh()
+    db.save_tenant_results("t1", {"tenant_name": "Acme", "devices": [
+        {"resource_name": "Edge-FW-01", "platform_name": "FortiOS", "resource_type": "FortiGate-60F",
+         "highest_severity_score": 9.8, "is_vulnerable": True, "cves": [{"id": "CVE-1", "score": 9.8}]},
+        {"resource_name": "core-sw-01", "platform_name": "IOS-XE", "os": "IOS-XE 17.9", "resource_type": "C9300",
+         "highest_severity_score": 9.8, "is_vulnerable": True, "cves": [{"id": "CVE-2", "score": 9.8}]},
+        {"resource_name": "ap-lobby", "platform_name": "", "os": "", "resource_type": "FortiAP-231F",
+         "highest_severity_score": 0, "is_vulnerable": False, "cves": []},
+    ]})
+    queued = sorted(d["resource_name"] for d in db.get_devices_needing_fba_refresh())
+    assert queued == ["Edge-FW-01", "ap-lobby"]            # model alone is enough; Cisco never queued
+    assert db.get_device_fba_by_name("core-sw-01")["fba_state"] == "not_applicable"
+    assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "pending"

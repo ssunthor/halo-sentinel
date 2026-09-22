@@ -617,16 +617,23 @@ def get_severity_breakdown() -> dict:
 # FBA (Firewall Baseline Analysis) helpers
 # ---------------------------------------------------------------------------
 
+# FBA (FortiBleed Analyzer) holds Fortinet configs only. Devices of any other
+# vendor are never looked up — that is most of the estate, and each lookup is
+# 1-2 requests to the GIA API.
+FBA_VENDOR_SQL = "(d.platform_name LIKE 'Forti%' OR d.os LIKE 'Forti%' OR d.resource_type LIKE 'Forti%')"
+
+
 def get_devices_needing_fba_refresh(max_age_hours: int = 24, retry_hours: int = 1) -> list[dict]:
-    """Return all devices whose FBA data is absent or older than max_age_hours.
+    """Return Fortinet devices whose FBA data is absent or older than max_age_hours.
     A device whose last lookup FAILED (as opposed to "not found") is held back
     for retry_hours so an FBA outage doesn't turn into a tight retry loop.
     Vulnerable devices go first — they are the ones people open."""
-    rows = _connect().execute("""
+    rows = _connect().execute(f"""
         SELECT d.id, d.resource_name, t.name AS tenant_name
         FROM devices d
         JOIN tenants t ON d.tenant_id = t.tenant_id
-        WHERE (d.fba_scanned_at IS NULL
+        WHERE {FBA_VENDOR_SQL}
+          AND (d.fba_scanned_at IS NULL
                OR datetime(d.fba_scanned_at) < datetime('now', ? || ' hours'))
           AND (d.fba_lookup_failed_at IS NULL
                OR datetime(d.fba_lookup_failed_at) < datetime('now', ? || ' hours'))
@@ -727,20 +734,23 @@ def get_device_ids_by_name(resource_name: str) -> list[int]:
 def get_device_fba_by_name(resource_name: str) -> dict | None:
     """Return stored FBA data for a device by its resource_name."""
     import json as _json
-    row = _connect().execute("""
+    row = _connect().execute(f"""
         SELECT fba_scanned_at, fba_analyzed, fba_vulnerable, fba_vuln_acl,
                fba_vuln_password, fba_reason, fba_findings, fba_error,
-               fba_lookup_failed_at
-        FROM devices WHERE resource_name = ?
+               fba_lookup_failed_at, {FBA_VENDOR_SQL} AS fba_vendor
+        FROM devices d WHERE resource_name = ?
         LIMIT 1
     """, (resource_name,)).fetchone()
     if not row:
         return None
     d = dict(row)
+    fba_vendor = bool(d.pop("fba_vendor"))
     # One unambiguous state for the UI. "pending" and "lookup_failed" used to be
     # indistinguishable from "not_found" (all three have fba_analyzed falsy).
     if d.get("fba_analyzed"):
         d["fba_state"] = "analyzed"
+    elif not fba_vendor and not d.get("fba_scanned_at"):
+        d["fba_state"] = "not_applicable"      # FBA is Fortinet-only; never looked up
     elif d.get("fba_lookup_failed_at"):      # cleared by any lookup that gets an answer
         d["fba_state"] = "lookup_failed"
     elif not d.get("fba_scanned_at"):

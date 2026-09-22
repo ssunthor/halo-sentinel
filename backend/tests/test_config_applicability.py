@@ -368,3 +368,13 @@ def test_verdict_fingerprint_and_prompt_block():
     # a changed verdict must change the key, so the old write-up is not reused
     verdicts["CVE-A"] = {**verdicts["CVE-A"], "verdict": "exploitable"}
     assert ca.verdict_fingerprint(verdicts, cves) != fp
+
+
+def test_fba_fingerprint():
+    assert ca.fba_fingerprint(None) == "" and ca.fba_fingerprint({"fba_analyzed": 0}) == ""
+    a = {"fba_analyzed": 1, "fba_vulnerable": 0, "fba_vuln_acl": 0, "fba_vuln_password": 0,
+         "fba_reason": "ok", "fba_findings": [{"severity": "WARNING", "category": "X", "issue": "y"}]}
+    fp = ca.fba_fingerprint(a)
+    assert fp and fp == ca.fba_fingerprint({**a, "fba_findings": json.dumps(a["fba_findings"])})
+    assert ca.fba_fingerprint({**a, "fba_vuln_acl": 1}) != fp
+    assert ca.fba_fingerprint({**a, "fba_findings": []}) != fp

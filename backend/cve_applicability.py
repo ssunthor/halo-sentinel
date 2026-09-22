@@ -84,6 +84,28 @@ def verdict_fingerprint(verdicts: dict[str, dict] | None, cves: list[dict]) -> s
     return hashlib.sha256(joined.encode()).hexdigest()[:12]
 
 
+def fba_fingerprint(fba_data: dict | None) -> str:
+    """Short stable digest of what the FBA config audit says about a device
+    ('' when FBA has not analysed it). Part of the prose-analysis cache key and
+    the trigger for regenerating the write-up when FBA data arrives or changes."""
+    if not fba_data or not fba_data.get("fba_analyzed"):
+        return ""
+    findings = fba_data.get("fba_findings") or []
+    if isinstance(findings, str):
+        try:
+            findings = json.loads(findings)
+        except Exception:
+            findings = []
+    parts = [
+        str(bool(fba_data.get("fba_vulnerable"))),
+        str(bool(fba_data.get("fba_vuln_acl"))),
+        str(bool(fba_data.get("fba_vuln_password"))),
+        (fba_data.get("fba_reason") or "")[:300],
+    ] + sorted(f"{f.get('severity', '')}:{f.get('category', '')}:{(f.get('issue') or '')[:200]}"
+               for f in findings if isinstance(f, dict))
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
+
+
 def verdicts_prompt_block(verdicts: dict[str, dict] | None, cves: list[dict]) -> str:
     """Prompt section that makes the prose risk write-up agree with the per-CVE
     config verdicts shown beside it in the UI."""

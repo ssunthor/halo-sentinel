@@ -198,3 +198,29 @@ def test_one_time_requeue_of_untrusted_not_found_rows():
     db.update_device_fba(dev_id, None, NOW)
     db.init_db()                                                   # runs once only
     assert db.get_device_fba_by_name("Edge-FW-01")["fba_state"] == "not_found"
+
+
+def test_fba_result_change_queues_analysis_regeneration():
+    _fresh()
+    _scan(["CVE-1"])
+    db.update_device_llm_analysis("t1", "Edge-FW-01", "written before FBA data existed")
+    [dev_id] = db.get_device_ids_by_name("Edge-FW-01")
+
+    # "not found" carries no audit → nothing to regenerate from
+    assert db.update_device_fba(dev_id, None, NOW) is False
+    assert db.get_devices_needing_llm("t1") == []
+
+    audit = {"analyzed": True, "vulnerable": False, "reason": "trusthosts set",
+             "findings": [{"severity": "WARNING", "category": "ACL_EXPOSURE", "issue": "loopback"}]}
+    assert db.update_device_fba(dev_id, audit, NOW) is True
+    assert [d["resource_name"] for d in db.get_devices_needing_llm("t1")] == ["Edge-FW-01"]
+
+    # same audit again (daily refresh) → no churn
+    db.update_device_llm_analysis("t1", "Edge-FW-01", "rewritten with FBA data")
+    assert db.update_device_fba(dev_id, audit, NOW) is False
+    assert db.get_devices_needing_llm("t1") == []
+
+    # a new finding → regenerate again
+    audit["findings"].append({"severity": "CRITICAL", "category": "WEAK_PASSWORD", "issue": "md5"})
+    assert db.update_device_fba(dev_id, audit, NOW) is True
+    assert len(db.get_devices_needing_llm("t1")) == 1

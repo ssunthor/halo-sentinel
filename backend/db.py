@@ -12,6 +12,8 @@ import re
 import glob
 from datetime import datetime
 
+from cve_applicability import fba_fingerprint
+
 DB_PATH = os.path.join(os.getenv("CACHE_DIR", "/app/cache"), "cve_analyzer.db")
 
 _local = threading.local()
@@ -643,12 +645,15 @@ def mark_fba_lookup_failed(device_id: int, failed_at: str) -> None:
         _connect().commit()
 
 
-def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> None:
+def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> bool:
     """
     Persist FBA result for a device.
     data=None means no config was found (fba_error=1, fba_analyzed=0).
+    Returns True when the audit result changed; the device's prose AI analysis
+    is then queued for regeneration so it reflects the FBA findings.
     """
     import json as _json
+    before = fba_fingerprint(_fba_row(device_id))
     with _write_lock:
         if data is None:
             _connect().execute("""
@@ -686,6 +691,31 @@ def update_device_fba(device_id: int, data: dict | None, scanned_at: str) -> Non
                 device_id,
             ))
         _connect().commit()
+    changed = fba_fingerprint(_fba_row(device_id)) != before
+    if changed:
+        with _write_lock:
+            _connect().execute(
+                "UPDATE devices SET llm_analysis = 'Analyzing vulnerabilities...' "
+                "WHERE id = ? AND is_vulnerable = 1", (device_id,)
+            )
+            _connect().commit()
+    return changed
+
+
+def _fba_row(device_id: int) -> dict | None:
+    import json as _json
+    row = _connect().execute(
+        "SELECT fba_analyzed, fba_vulnerable, fba_vuln_acl, fba_vuln_password, fba_reason, fba_findings "
+        "FROM devices WHERE id = ?", (device_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["fba_findings"] = _json.loads(d["fba_findings"] or "[]")
+    except Exception:
+        d["fba_findings"] = []
+    return d
 
 
 def get_device_ids_by_name(resource_name: str) -> list[int]:

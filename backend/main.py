@@ -220,13 +220,18 @@ class VulnerabilityRequestBroker:
 # LLM HELPERS
 # ---------------------------------------------------------------------------
 
-def _analysis_cache_key(resource_name, cves, verdicts=None):
-    """Prose-analysis cache key. Devices with config verdicts get a verdict
-    fingerprint appended, so an analysis written before the verdicts existed
-    (or under different ones) is regenerated instead of reused."""
+def _analysis_cache_key(resource_name, cves, verdicts=None, fba_data=None):
+    """Prose-analysis cache key. Devices with config verdicts and/or an FBA
+    audit get fingerprints appended, so an analysis written before that data
+    existed (or under different data) is regenerated instead of reused."""
     key = f"{resource_name}-{'-'.join(sorted(c['id'] for c in cves))}"
     fp = cve_applicability.verdict_fingerprint(verdicts, cves)
-    return f"{key}-cfg:{fp}" if fp else key
+    if fp:
+        key += f"-cfg:{fp}"
+    fp = cve_applicability.fba_fingerprint(fba_data)
+    if fp:
+        key += f"-fba:{fp}"
+    return key
 
 
 async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None, verdicts=None):
@@ -563,16 +568,16 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
         llm_analysis = partial_res["llm_analysis"]
         if device_cves:
-            verdicts = await asyncio.get_running_loop().run_in_executor(
-                thread_pool, db.get_cve_verdicts, resource_name
-            )
-            key = _analysis_cache_key(resource_name, device_cves, verdicts)
+            loop = asyncio.get_running_loop()
+            verdicts = await loop.run_in_executor(thread_pool, db.get_cve_verdicts, resource_name)
+            fba_data = await loop.run_in_executor(thread_pool, db.get_device_fba_by_name, resource_name)
+            key = _analysis_cache_key(resource_name, device_cves, verdicts, fba_data)
             if key in llm_analysis_cache:
                 llm_analysis = llm_analysis_cache[key]
             else:
                 llm_analysis = await get_llm_analysis(
                     resource_name, model, f"{os_name} {os_version or ''}", device_cves,
-                    verdicts=verdicts,
+                    fba_data=fba_data, verdicts=verdicts,
                 )
                 llm_analysis_cache[key] = llm_analysis
                 save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)
@@ -1247,7 +1252,8 @@ async def llm_analysis_worker():
 
                     cves     = dev["cves"]
                     verdicts = await loop.run_in_executor(thread_pool, db.get_cve_verdicts, dname)
-                    cve_key  = _analysis_cache_key(dname, cves, verdicts)
+                    fba_data = await loop.run_in_executor(thread_pool, db.get_device_fba_by_name, dname)
+                    cve_key  = _analysis_cache_key(dname, cves, verdicts, fba_data)
                     from_cache = cve_key in llm_analysis_cache
 
                     _ai_stats["current_device"] = dname
@@ -1259,9 +1265,6 @@ async def llm_analysis_worker():
                     else:
                         print(f"    🤖 [{tname}] analysing {dname} ({len(cves)} CVE(s), score {stub['highest_severity_score']:.1f})…")
                         t0 = time.time()
-                        fba_data = await loop.run_in_executor(
-                            thread_pool, db.get_device_fba_by_name, dname
-                        )
                         async with _llm_worker_sem:
                             analysis = await get_llm_analysis(
                                 dname,
@@ -2289,6 +2292,7 @@ async def fba_enrichment_worker():
             done_count    = 0
             found_count   = 0
             failed_count  = 0
+            requeued      = 0     # analyses queued for regeneration because FBA data changed
             CHUNK_SIZE    = 200
             abort_reason  = None
 
@@ -2324,9 +2328,10 @@ async def fba_enrichment_worker():
                         failed_count += 1
                         chunk_failed += 1
                         continue
-                    await loop.run_in_executor(
+                    if await loop.run_in_executor(
                         thread_pool, db.update_device_fba, device_id, data, scanned_at
-                    )
+                    ):
+                        requeued += 1
                     if data is not None:
                         found_count += 1
 
@@ -2362,7 +2367,8 @@ async def fba_enrichment_worker():
                 await asyncio.sleep(FBA_RETRY_HOURS * 3600)
                 continue
             print(f"✅ FBA: complete — {done_count} processed, {found_count} configs found, "
-                  f"{done_count - found_count - failed_count} not in FBA, {failed_count} lookups failed (retry in {FBA_RETRY_HOURS}h).")
+                  f"{done_count - found_count - failed_count} not in FBA, {failed_count} lookups failed (retry in {FBA_RETRY_HOURS}h); "
+                  f"{requeued} AI analyses queued for regeneration.")
             if failed_count:
                 print(f"⚠️  FBA: last lookup error — {fba_client.last_error}"
                       + ("  → FBA's certificate is issued by the corporate CA; set FBA_VERIFY_SSL to the CA bundle path."

@@ -503,13 +503,14 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
     print(f"      📊 {resource_name}: {len(final_cves_data.get('vulnerabilities', []))} raw CVEs for '{current_search_query}'")
 
-    # GIA engineering version lookup (cached per platform — one API call shared
-    # across all devices on the same platform within the same scan cycle).
+    # GTT Engineering recommended version (GIA/DIU): one cached table for the
+    # estate, matched per device from platform + model + NetBox role. Persisted
+    # only when the device is behind the engineering standard.
     gia_data = None
     try:
-        gia_data = await gia_client.lookup_platform_version(os_name)
+        gia_data = await gia_client.lookup_netbox(resource, resource_type)
     except Exception as gia_err:
-        print(f"      ⚠️ GIA lookup failed for '{os_name}': {gia_err}")
+        print(f"      ⚠️ GIA lookup failed for '{resource_name}': {gia_err}")
 
     try:
         final_cves_data, dropped = cve_matching.filter_by_version(final_cves_data, os_name, os_version)
@@ -526,7 +527,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "platform_name": os_name,
             "os_version": os_version,
             "recommended_version": recommended_version,
-            "gia_recommended_version": (gia_data or {}).get("gia_recommended_version"),
+            **gia_client.upgrade_fields(gia_data),
             "serial": serial,
             "pon": pon,
             "highest_severity_score": highest,
@@ -570,7 +571,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "platform_name": os_name,
             "os_version": os_version,
             "recommended_version": None,
-            "gia_recommended_version": (gia_data or {}).get("gia_recommended_version"),
+            **gia_client.upgrade_fields(gia_data),
             "serial": serial,
             "pon": pon,
             "highest_severity_score": 0.0,
@@ -963,37 +964,21 @@ async def run_global_scan():
             scan_ts = datetime.utcnow().isoformat()
 
             # ----------------------------------------------------------------
-            # Phase 3b — GIA engineering version lookup (one per platform)
+            # Phase 3b — GTT Engineering recommended versions (GIA/DIU)
+            # One table load for the whole estate; each device is matched to
+            # its engineering row in _make_record below.
             # ----------------------------------------------------------------
-            state["phase"] = f"Looking up engineering versions via GIA ({len(platform_names)} platforms)"
+            state["phase"] = "Loading engineering recommended versions from GIA"
             await _push_global({"type": "progress", "state": dict(state)})
 
-            gia_version_map: dict[str, str | None] = {}
-            print(f"  [GIA] starting lookups for {len(platform_names)} platform(s): {sorted(platform_names)[:5]}", flush=True)
-            if platform_names:
-                gia_tasks = {p: gia_client.lookup_platform_version(p) for p in platform_names}
-                gia_results = await asyncio.gather(*gia_tasks.values(), return_exceptions=True)
-                for pname, result in zip(gia_tasks.keys(), gia_results):
-                    if isinstance(result, Exception):
-                        print(f"  [GIA] lookup error for {pname!r}: {result}", flush=True)
-                        gia_version_map[pname] = None
-                    else:
-                        gia_version_map[pname] = (result or {}).get("gia_recommended_version")
-                found = sum(1 for v in gia_version_map.values() if v)
-                # Print a consolidated summary block — easy to find even if earlier per-lookup
-                # lines have scrolled out of the buffer.
-                hits   = sorted(p for p, v in gia_version_map.items() if v)
-                misses = sorted(p for p, v in gia_version_map.items() if not v)
-                print(
-                    f"\n{'='*60}\n"
-                    f"  [GIA] SCAN COMPLETE — {found}/{len(platform_names)} platforms matched\n"
-                    f"  Check /api/gia/status for full cache contents\n"
-                    f"  MATCHED ({len(hits)}): {', '.join(hits) or 'none'}\n"
-                    f"  NO MATCH ({len(misses)}): {', '.join(misses[:20])}"
-                    f"{'...' if len(misses) > 20 else ''}\n"
-                    f"{'='*60}\n",
-                    flush=True,
-                )
+            gia_table = None
+            if any(gia_client.is_fortinet(*_device_os(d)[:1]) for d in all_devices):
+                try:
+                    gia_table = await gia_client.ensure_table()
+                except Exception as gia_err:
+                    print(f"  [GIA] table load failed: {gia_err}", flush=True)
+            state["gia_table"] = gia_table["table_id"] if gia_table else None
+            gia_before = dict(gia_client.stats)
 
             state["phase_timings"]["gia_seconds"] = round(time.time() - phase_t, 1)
             phase_t = time.time()
@@ -1022,7 +1007,7 @@ async def run_global_scan():
                     "platform_name": os_name,
                     "os_version": os_version,
                     "recommended_version": recommended_version,
-                    "gia_recommended_version": gia_version_map.get(os_name) if os_name else None,
+                    **gia_client.upgrade_fields(gia_client.recommend_for_netbox(d, rtype)),
                     "serial": serial,
                     "pon": pon,
                     "highest_severity_score": highest,
@@ -1063,6 +1048,14 @@ async def run_global_scan():
                     continue
                 tenant_names[tid] = tname
                 tenant_devices.setdefault(tid, []).append(_make_record(d, [], 0.0))
+
+            gia_now = gia_client.stats
+            state["gia_upgrade_needed"] = gia_now["upgrade_needed"] - gia_before["upgrade_needed"]
+            state["gia_compliant"] = gia_now["compliant"] - gia_before["compliant"]
+            state["gia_no_row"] = gia_now["no_row"] - gia_before["no_row"]
+            print(f"  [GIA] {state['gia_upgrade_needed']} device(s) behind the engineering standard, "
+                  f"{state['gia_compliant']} compliant, {state['gia_no_row']} Fortinet device(s) without a "
+                  f"matching row (table {state['gia_table'] or 'not loaded'}; see /api/gia/status)", flush=True)
 
             state["phase"] = f"Saving results for {len(tenant_devices)} tenants"
             await _push_global({"type": "progress", "state": dict(state)})
@@ -2021,32 +2014,12 @@ async def get_status():
 
 
 @app.get("/api/gia/status")
-async def gia_status():
-    """Dump the GIA version cache — readable any time after a scan completes."""
-    import gia_client as _gia
-    import time as _time
-    cache = _gia._cache
-    now = _time.monotonic()
-    rows = []
-    for key, (result, cached_at) in sorted(cache.items()):
-        age_s = int(now - cached_at)
-        rows.append({
-            "platform_key": key,
-            "gia_recommended_version": (result or {}).get("gia_recommended_version"),
-            "gia_component": (result or {}).get("gia_component"),
-            "matched": result is not None and bool((result or {}).get("gia_recommended_version")),
-            "age_seconds": age_s,
-        })
-    matched = sum(1 for r in rows if r["matched"])
-    return {
-        "total_cached": len(rows),
-        "matched": matched,
-        "no_match": len(rows) - matched,
-        "cache_ttl_hours": _gia.GIA_CACHE_TTL_S / 3600,
-        "api_key_set": bool(_gia.GIA_API_KEY),
-        "base_url": _gia.GIA_BASE_URL,
-        "entries": rows,
-    }
+async def gia_status(reload: bool = False):
+    """The cached GTT Engineering versions table (GIA/DIU) and match counters.
+    ?reload=true re-fetches it now instead of waiting for the cache TTL."""
+    if reload:
+        await gia_client.ensure_table(force=True)
+    return gia_client.status()
 
 
 # ---------------------------------------------------------------------------

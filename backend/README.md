@@ -126,6 +126,9 @@ The SQLite database lives at `/app/cache/cve_analyzer.db` (configured via `CACHE
 | `os` | TEXT | Combined OS string (`platform_name os_version`) |
 | `platform_name` | TEXT | OS/platform name from NetBox |
 | `os_version` | TEXT | Firmware/OS version from custom fields |
+| `recommended_version` | TEXT | Lowest NVD fix version that closes the device's remaining CVEs |
+| `gia_recommended_version` | TEXT | GTT Engineering recommended version (GIA/DIU); set only when the device is behind it |
+| `gia_component` | TEXT | Engineering approved-versions row the device was matched to, e.g. `Fortigate SD WAN Edge` |
 | `serial` | TEXT | Serial number (devices only) |
 | `pon` | TEXT | PON identifier from `cmd_pon` custom field |
 | `highest_severity_score` | REAL | Max CVSS score across all CVEs |
@@ -223,6 +226,10 @@ Build a `combo_map`: a dict mapping each unique `(NVD query string)` → `[list 
 
 All `combo_map` keys are submitted concurrently to `VulnerabilityRequestBroker` via `asyncio.gather()`. The broker's single worker serialises actual API calls with a 10-second sleep between each; cache hits are returned instantly. Progress (`nvd_queried`, `nvd_cached`) is broadcast live.
 
+#### Phase 3b — Engineering recommended versions
+
+If the inventory contains any Fortinet device, the GTT Engineering approved-versions table is loaded once from GIA (see [GTT Engineering Recommended Versions](#gtt-engineering-recommended-versions-giadiu)). Every device record built in Phase 4 is then matched to its engineering row in memory; no further GIA requests are made.
+
 #### Phase 4 — Fan-out and save
 
 CVE results are fanned back out to all matching devices, grouped by tenant, then saved to SQLite via `db.save_tenant_results()` for each tenant. The `bulk_scan` flag is set on each tenant row to indicate that per-device LLM analysis was deferred.
@@ -242,6 +249,32 @@ CVE results are fanned back out to all matching devices, grouped by tenant, then
   - FortiOS/FortiGate: extracts the `X.Y.Z` version from the build string
   - Platform names that embed a version number: the embedded version is removed to avoid redundancy (e.g. "IOS XE 17.x" + version "17.6.5" → `"IOS XE 17.6.5"`)
 - **CVE parsing (`_parse_cve_response`):** Prefers CVSS v3.1 → v3.0 → v2 in that order. Only entries with a CVSS score are retained.
+
+---
+
+### GTT Engineering Recommended Versions (GIA/DIU)
+
+Engineering keeps the software versions approved for production on the Confluence page _SD-WAN Software Version Control_. SERA's Data Inspector Utility (DIU) indexes that page, and GIA exposes it over REST at `https://gia-ai.gt-t.net/api/sam/diu` (same `X-API-Key` as FBA). `gia_client.py` uses two of its calls:
+
+- `GET /pages/search?query=SD-WAN Software Version Control&search_text=Fortinet Edges, Gateways, and Central Management Devices&expand=true` returns the page with only the matching section, whose `structured_tables_json` embeds the "Approved versions" tables.
+- `GET /tables/{table_id}` fetches one table directly. It is the fallback (`GIA_TABLE_IDS`, default `6848998_SEC_42_TABLE_1,6848998_SEC_42_TABLE_2`) when the search returns no tables.
+
+The section carries two tables: the live one, with a **GTT Preferred Version** column and an **Approved Date**, and an older one with only **New Deployments**. The client keeps the candidate with a GTT Preferred Version column and the most recent approval, and caches it in memory for `GIA_CACHE_TTL_HOURS` (default 24). A failed load is retried after `GIA_RETRY_MINUTES` (default 10); scans never wait on GIA.
+
+Rows are per product role, not per NetBox platform, so each device is mapped to a row from its platform, model and NetBox role:
+
+| NetBox evidence | Engineering row |
+| --- | --- |
+| Platform/model/role mention FortiManager or FortiAnalyzer | `FortiManager (Physical or VM)` / `FortiAnalyzer (Physical or VM)` |
+| Model `FortiSwitch-…` (role mentions NID/monitoring) | `FortiSwitch (FortiLink)` (`FortiSwitch (Used as a Nid for monitoring)`) |
+| Model `FortiAP-231F` etc. | The matching `FortiAP … (FortiLink)` row |
+| Role mentions gateway/GW, SSE, or NFV | `Fortigate SD WAN Gateway`, `Fortigate SSE Node`, `Fortigate VM on NFV POD` |
+| Model `FortiGate-VM64…` or a VM | `Fortigate SD WAN Edge (VM)` |
+| Any other FortiGate/FortiWiFi (almost all have the generic role `CPE`) | `Fortigate SD WAN Edge`, falling back to the `Fortigate Edge (non SDWAN/ipsec) E/F series` row of its hardware |
+
+The device's `x.y.z` (from `os_build`/`os_version`) is compared with the row's GTT Preferred Version. **Only a device that is behind it gets `gia_recommended_version` and `gia_component`**; a compliant device shows nothing, and a device whose version cannot be parsed is treated as behind. The dashboard shows the value as `Eng ★ 7.4.11` (row and detail view, with the engineering row in the tooltip); the Excel export has it in the _Eng Recommended Version_ column. Non-Fortinet devices are never looked up.
+
+`GET /api/gia/status` shows the cached table (id, source, every row with its recommended version), when it was loaded, the last error, and match counters (`upgrade_needed`, `compliant`, `no_row`, per-component). `?reload=true` re-fetches the table immediately. `GIA_DEBUG=true` logs every request and every device → row decision.
 
 ---
 
@@ -366,13 +399,14 @@ All endpoints are prefixed with `/api/`. The frontend accesses them through ngin
 | `GET` | `/api/export/all` | Excel workbook of all vulnerable devices across every tenant |
 | `GET` | `/api/export/tenant/{tenant_id}` | Excel workbook for a single tenant |
 
-The Excel export includes only devices with a CVE score > 0 and has the following columns: Client Name, Device Name, PON, Platform, Device Type, Current Firmware, Recommended Firmware (blank), Serial Number, Device CVE Score (colour-coded), Number of Vulnerabilities.
+The Excel export includes only devices with a CVE score > 0 and has the following columns: Client Name, Device Name, PON, Platform, Device Type, Current Firmware, NVD Min-Fix Version, Eng Recommended Version (GTT Engineering, only when the device is behind it), Serial Number, Device CVE Score (colour-coded), Number of Vulnerabilities.
 
 ### Health
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/status` | Service health check |
+| `GET` | `/api/gia/status?reload=false` | Cached GTT Engineering versions table, load state and match counters |
 
 ---
 
@@ -395,6 +429,15 @@ All configuration is via environment variables. The defaults below are suitable 
 | `REDIS_DB` | `0` | Redis database index |
 | `REDIS_PASSWORD` | `password` | Redis AUTH password |
 | `CACHE_DIR` | `/app/cache` | Directory for SQLite DB and JSON caches |
+| `GIA_BASE_URL` | `https://gia-ai.gt-t.net/api/sam/diu` | GIA's DIU REST endpoint (engineering recommended versions) |
+| `GIA_API_KEY` | `FBA_API_KEY` | `X-API-Key` for GIA; defaults to the FBA key |
+| `GIA_VERIFY_SSL` | `FBA_VERIFY_SSL` | CA bundle path, `true` or `false`; defaults to the FBA setting |
+| `GIA_CACHE_TTL_HOURS` | `24` | How long the engineering table is cached in memory |
+| `GIA_RETRY_MINUTES` | `10` | Wait before retrying a failed table load |
+| `GIA_PAGE_QUERY` | `SD-WAN Software Version Control` | Confluence page title searched via DIU |
+| `GIA_SECTION_TEXT` | `Fortinet Edges, Gateways, and Central Management Devices` | Section text the search is restricted to |
+| `GIA_TABLE_IDS` | `6848998_SEC_42_TABLE_1,6848998_SEC_42_TABLE_2` | Table ids fetched directly when the search finds no tables |
+| `GIA_DEBUG` | `false` | Log every GIA request and device → row decision |
 
 Redis is used only for scan progress counters. It is not required for core functionality — if Redis is unavailable the service logs a warning and continues.
 

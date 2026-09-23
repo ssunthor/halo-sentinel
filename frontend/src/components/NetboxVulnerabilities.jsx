@@ -757,7 +757,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                     </span>
                   )}
                   {device.gia_recommended_version && (
-                    <span className="text-[10px] text-blue-400/80 font-mono truncate max-w-full" title={`Engineering Recommended: ${device.gia_recommended_version}`}>
+                    <span className="text-[10px] text-blue-400/80 font-mono truncate max-w-full" title={`GTT Engineering Recommended${device.gia_component ? ` (${device.gia_component})` : ''}: ${device.gia_recommended_version} — upgrade needed`}>
                       Eng ★ {device.gia_recommended_version}
                     </span>
                   )}
@@ -840,6 +840,9 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-gray-500 uppercase tracking-wider">Engineering Rec:</span>
                         <span className="text-xs font-mono font-bold text-blue-400">{selectedDevice.gia_recommended_version}</span>
+                        {selectedDevice.gia_component && (
+                          <span className="text-[10px] text-gray-500" title="GTT Engineering approved-versions row this device was matched to">({selectedDevice.gia_component})</span>
+                        )}
                       </div>
                     )}
                     {selectedDevice.recommended_version && (

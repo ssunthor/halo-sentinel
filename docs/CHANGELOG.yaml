@@ -10,6 +10,27 @@
 # - "🧹 Refactoring & Chores"
 # ---------------------------------------------------------------------------
 ---
+- version: '0.1.6'
+  date: '2026-09-23'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🚀 Architecture & Infrastructure'
+      items:
+        - 'Centralized GIA API root configuration to share a single base URL across FBA and SAM/DIU services.'
+        - 'Optimized the engineering version lookup process to load a single global table per scan cycle, replacing inefficient per-platform API requests.'
+    - category: '✨ New Features & Enhancements'
+      items:
+        - 'Implemented advanced Fortinet device classification logic using platform, model, and NetBox role to accurately match devices to engineering standards.'
+        - 'Added support for parsing and splitting merged data rows from Confluence-backed version tables.'
+        - 'Introduced a comprehensive GIA status API providing visibility into cached tables, match counters, and manual reload capabilities.'
+        - 'Added persistence for the specific engineering component matched to a device to improve auditability of recommendations.'
+    - category: '🎨 UI / UX Improvements'
+      items:
+        - 'Enhanced the vulnerability dashboard and drill-down modals to display the specific engineering component matched for recommended versions via tooltips.'
+    - category: '🧹 Refactoring & Chores'
+      items:
+        - 'Introduced a comprehensive test suite for the GIA client to validate table parsing and device classification accuracy.'
+
 - version: '0.1.5'
   date: '2026-09-22'
   author: 'Scott Chrestman'

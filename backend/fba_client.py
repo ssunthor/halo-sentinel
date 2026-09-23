@@ -32,7 +32,11 @@ import re
 import time
 import httpx
 
-FBA_BASE_URL = os.getenv("FBA_BASE_URL", "https://gia-ai.gt-t.net/api/fba")
+# One GIA API root serves both FBA (/fba) and SAM/DIU (/sam/diu). Production
+# reaches GIA under a different name, so override the root with GIA_API_URL;
+# FBA_BASE_URL / GIA_DIU_URL remain per-service overrides on top of it.
+GIA_API_URL  = os.getenv("GIA_API_URL", "https://gia-ai.gt-t.net/api").rstrip("/")
+FBA_BASE_URL = os.getenv("FBA_BASE_URL", f"{GIA_API_URL}/fba").rstrip("/")
 FBA_API_KEY  = os.getenv("FBA_API_KEY",  "6PSYFpBW4Ax48V2CNpXuid1679tTtMKk")
 FBA_TIMEOUT  = float(os.getenv("FBA_TIMEOUT_SECONDS", "15"))
 FBA_RATE_LIMIT = float(os.getenv("FBA_RATE_LIMIT", "5"))   # requests per second, all lookups combined

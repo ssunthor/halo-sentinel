@@ -137,8 +137,10 @@ def init_db():
             ("recommended_version",      "TEXT"),
             ("serial",                   "TEXT"),
             ("pon",                      "TEXT"),
-            # GIA engineering-recommended version
+            # GTT Engineering recommended version (GIA/DIU) + the engineering
+            # row it came from; both NULL when the device is not behind it
             ("gia_recommended_version",  "TEXT"),
+            ("gia_component",            "TEXT"),
             # FBA config-analysis columns
             ("fba_scanned_at",           "TEXT"),
             ("fba_analyzed",             "INTEGER"),
@@ -318,10 +320,10 @@ def save_tenant_results(tenant_id: str, data: dict):
                     INSERT INTO devices
                         (tenant_id, resource_name, resource_category, resource_type,
                          os, platform_name, os_version, recommended_version,
-                         gia_recommended_version, serial, pon,
+                         gia_recommended_version, gia_component, serial, pon,
                          highest_severity_score, is_vulnerable, llm_analysis, scanned_at,
                          {fba_cols})
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {fba_ph})
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {fba_ph})
                 """.format(fba_cols=", ".join(_FBA_COLS), fba_ph=", ".join("?" * len(_FBA_COLS))), (
                     tenant_id,
                     dev.get("resource_name"),
@@ -332,6 +334,7 @@ def save_tenant_results(tenant_id: str, data: dict):
                     dev.get("os_version"),
                     dev.get("recommended_version"),
                     dev.get("gia_recommended_version"),
+                    dev.get("gia_component"),
                     dev.get("serial"),
                     dev.get("pon"),
                     dev.get("highest_severity_score", 0.0),
@@ -406,6 +409,7 @@ def load_tenant_results(tenant_id: str) -> dict:
                 "os_version": dev["os_version"],
                 "recommended_version": dev["recommended_version"],
                 "gia_recommended_version": dev["gia_recommended_version"],
+                "gia_component": dev["gia_component"],
                 "serial": dev["serial"],
                 "pon": dev["pon"],
                 "highest_severity_score": dev["highest_severity_score"],
@@ -1034,6 +1038,7 @@ _DRILLDOWN_COLS = """
     d.os_version                AS current_firmware,
     d.recommended_version,
     d.gia_recommended_version,
+    d.gia_component,
     d.serial,
     d.highest_severity_score    AS cve_score,
     d.resource_category,
@@ -1135,6 +1140,9 @@ def get_all_cve_instances() -> list[dict]:
             d.resource_name,
             d.platform_name,
             d.os_version    AS current_firmware,
+            d.recommended_version,
+            d.gia_recommended_version,
+            d.gia_component,
             c.cve_id,
             c.score,
             c.severity,
@@ -1306,6 +1314,7 @@ def get_export_rows(
             d.os_version                AS current_firmware,
             d.recommended_version,
             d.gia_recommended_version,
+            d.gia_component,
             d.serial,
             d.highest_severity_score    AS cve_score,
             d.resource_category,

@@ -4,7 +4,8 @@ GIA SAM/DIU client — GTT Engineering's approved software versions.
 Engineering publishes the versions approved for production on the Confluence
 page "SD-WAN Software Version Control" (space UW, page 6848998). SERA's Data
 Inspector Utility (DIU, sera/admin-suite/data-inspector-utility) indexes that
-page and GIA fronts the DIU gRPC service over REST:
+page and GIA fronts the DIU gRPC service over REST (GIA_API_URL + /sam/diu;
+the same root that serves FBA under /fba):
 
   GET /api/sam/diu/pages/search?query=<page title>&search_text=<text>&expand=true
       GetPagesByTitle: pages whose title matches `query`, restricted to the
@@ -51,7 +52,8 @@ import httpx
 import cve_matching
 import fba_client
 
-GIA_BASE_URL     = os.getenv("GIA_BASE_URL", "https://gia-ai.gt-t.net/api/sam/diu").rstrip("/")
+# Root shared with FBA (fba_client.GIA_API_URL); GIA_DIU_URL overrides just this service.
+GIA_BASE_URL     = os.getenv("GIA_DIU_URL", f"{fba_client.GIA_API_URL}/sam/diu").rstrip("/")
 GIA_API_KEY      = os.getenv("GIA_API_KEY") or fba_client.FBA_API_KEY
 GIA_TIMEOUT      = float(os.getenv("GIA_TIMEOUT_SECONDS", "20"))
 GIA_CACHE_TTL_S  = float(os.getenv("GIA_CACHE_TTL_HOURS", "24")) * 3600
@@ -62,7 +64,7 @@ GIA_SECTION_TEXT = os.getenv("GIA_SECTION_TEXT", "Fortinet Edges, Gateways, and 
 GIA_TABLE_IDS    = [t.strip() for t in os.getenv(
     "GIA_TABLE_IDS", "6848998_SEC_42_TABLE_1,6848998_SEC_42_TABLE_2").split(",") if t.strip()]
 
-# Same corporate CA as FBA (both live on gia-ai.gt-t.net); GIA_VERIFY_SSL
+# Same corporate CA as FBA (both live on the same GIA host); GIA_VERIFY_SSL
 # overrides FBA_VERIFY_SSL with the same semantics (CA bundle path / false).
 _verify_env = os.getenv("GIA_VERIFY_SSL", "").strip()
 GIA_VERIFY_SSL = (fba_client.FBA_VERIFY_SSL if not _verify_env

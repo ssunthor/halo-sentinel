@@ -254,7 +254,7 @@ CVE results are fanned back out to all matching devices, grouped by tenant, then
 
 ### GTT Engineering Recommended Versions (GIA/DIU)
 
-Engineering keeps the software versions approved for production on the Confluence page _SD-WAN Software Version Control_. SERA's Data Inspector Utility (DIU) indexes that page, and GIA exposes it over REST at `https://gia-ai.gt-t.net/api/sam/diu` (same `X-API-Key` as FBA). `gia_client.py` uses two of its calls:
+Engineering keeps the software versions approved for production on the Confluence page _SD-WAN Software Version Control_. SERA's Data Inspector Utility (DIU) indexes that page, and GIA exposes it over REST at `${GIA_API_URL}/sam/diu` (the same API root that serves FBA under `/fba`, same `X-API-Key`). `gia_client.py` uses two of its calls:
 
 - `GET /pages/search?query=SD-WAN Software Version Control&search_text=Fortinet Edges, Gateways, and Central Management Devices&expand=true` returns the page with only the matching section, whose `structured_tables_json` embeds the "Approved versions" tables.
 - `GET /tables/{table_id}` fetches one table directly. It is the fallback (`GIA_TABLE_IDS`, default `6848998_SEC_42_TABLE_1,6848998_SEC_42_TABLE_2`) when the search returns no tables.
@@ -429,7 +429,9 @@ All configuration is via environment variables. The defaults below are suitable 
 | `REDIS_DB` | `0` | Redis database index |
 | `REDIS_PASSWORD` | `password` | Redis AUTH password |
 | `CACHE_DIR` | `/app/cache` | Directory for SQLite DB and JSON caches |
-| `GIA_BASE_URL` | `https://gia-ai.gt-t.net/api/sam/diu` | GIA's DIU REST endpoint (engineering recommended versions) |
+| `GIA_API_URL` | `https://gia-ai.gt-t.net/api` | GIA API root shared by FBA (`/fba`) and SAM/DIU (`/sam/diu`); set this where GIA has a different name (e.g. production) |
+| `FBA_BASE_URL` | `${GIA_API_URL}/fba` | Per-service override of the FBA endpoint |
+| `GIA_DIU_URL` | `${GIA_API_URL}/sam/diu` | Per-service override of the DIU endpoint (engineering recommended versions) |
 | `GIA_API_KEY` | `FBA_API_KEY` | `X-API-Key` for GIA; defaults to the FBA key |
 | `GIA_VERIFY_SSL` | `FBA_VERIFY_SSL` | CA bundle path, `true` or `false`; defaults to the FBA setting |
 | `GIA_CACHE_TTL_HOURS` | `24` | How long the engineering table is cached in memory |

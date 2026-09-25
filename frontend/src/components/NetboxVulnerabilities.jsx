@@ -3,6 +3,8 @@ import { Server, X, Router, Network, Shield, HardDrive, ChevronDown, ChevronUp, 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { InfoTip } from './Tooltip';
+import { CveConfigVerdict, ConfigCoverageNote } from './CveConfigVerdict';
+import { useCveConfig } from './useCveConfig';
 
 // ---------------------------------------------------------------------------
 // SEVERITY HELPERS
@@ -226,10 +228,22 @@ function CopyButton({ text }) {
   );
 }
 
+// Why there is no FBA audit to show. These used to be one message ("No
+// configuration profile found"), which was wrong for devices that simply had
+// not been looked up yet or whose lookup had failed.
+const FBA_EMPTY_STATE = {
+  pending: 'Not checked against FBA yet — the lookup for this device is queued.',
+  lookup_failed: 'The FBA lookup for this device failed (FBA unreachable or returned an error). It is retried automatically.',
+  not_analyzed: "FBA holds this device's configuration but has not audited it yet.",
+  not_found: 'No configuration profile found for this device in the FBA system.',
+  not_applicable: 'FBA audits Fortinet devices only — this device is not looked up.',
+};
+
 const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
   const [fba, setFba]         = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(false);
+  const [rechecking, setRechecking] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -244,6 +258,16 @@ const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, [deviceName, apiBase]);
+
+  // Look the device up in FBA now instead of waiting for the background worker.
+  const recheck = () => {
+    setRechecking(true);
+    fetch(`${apiBase}/api/device/${encodeURIComponent(deviceName)}/fba/refresh`, { method: 'POST' })
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(data => setFba(data))
+      .catch(() => {})
+      .finally(() => setRechecking(false));
+  };
 
   if (loading) {
     return (
@@ -277,7 +301,19 @@ const ConfigAnalysisSection = ({ deviceName, apiBase }) => {
         <h3 className="text-sm font-bold mb-2 text-cyan-400 flex items-center gap-2">
           <ShieldOff size={14} /> Config Analysis
         </h3>
-        <p className="text-xs text-gray-600">No configuration profile found for this device in the FBA system.</p>
+        <p className="text-xs text-gray-600">{FBA_EMPTY_STATE[fba.fba_state] || FBA_EMPTY_STATE.not_found}</p>
+        {fba.fba_lookup_error && (
+          <p className="text-[11px] font-mono text-orange-400 mt-1 break-words">{fba.fba_lookup_error}</p>
+        )}
+        <button
+          type="button"
+          onClick={recheck}
+          disabled={rechecking}
+          className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-cyan-400 hover:text-cyan-300 disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={rechecking ? 'animate-spin' : ''} />
+          {rechecking ? 'Checking FBA…' : 'Re-check FBA now'}
+        </button>
       </div>
     );
   }
@@ -368,6 +404,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
   const [total, setTotal] = useState(0);
   const [staleNotice, setStaleNotice] = useState(null);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const cveConfig = useCveConfig(selectedDevice?.resource_name, apiBase);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
@@ -720,7 +757,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                     </span>
                   )}
                   {device.gia_recommended_version && (
-                    <span className="text-[10px] text-blue-400/80 font-mono truncate max-w-full" title={`Engineering Recommended: ${device.gia_recommended_version}`}>
+                    <span className="text-[10px] text-blue-400/80 font-mono truncate max-w-full" title={`GTT Engineering Recommended${device.gia_component ? ` (${device.gia_component})` : ''}: ${device.gia_recommended_version} — upgrade needed`}>
                       Eng ★ {device.gia_recommended_version}
                     </span>
                   )}
@@ -729,8 +766,18 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                   {device.llm_analysis === 'Scanning...' ? (
                     <RefreshCw size={14} className="animate-spin text-gray-600 ml-auto" />
                   ) : (
-                    <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
-                      {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : '0.0'}
+                    <span className="flex flex-col items-end leading-tight">
+                      <span className={`text-lg font-black ${getSeverityTextClass(device.highest_severity_score)}`}>
+                        {device.highest_severity_score > 0 ? device.highest_severity_score.toFixed(1) : '0.0'}
+                      </span>
+                      {device.effective_severity_score != null && device.effective_severity_score < device.highest_severity_score && (
+                        <span
+                          className={`text-[10px] font-mono font-bold ${getSeverityTextClass(device.effective_severity_score)}`}
+                          title="Effective score: highest CVSS among the CVEs this device's running configuration has NOT ruled out (feature not enabled / already mitigated). The raw CVSS score above is unchanged."
+                        >
+                          <span className="text-gray-500 font-normal">effective </span>{device.effective_severity_score.toFixed(1)}
+                        </span>
+                      )}
                     </span>
                   )}
                 </div>
@@ -793,6 +840,9 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-gray-500 uppercase tracking-wider">Engineering Rec:</span>
                         <span className="text-xs font-mono font-bold text-blue-400">{selectedDevice.gia_recommended_version}</span>
+                        {selectedDevice.gia_component && (
+                          <span className="text-[10px] text-gray-500" title="GTT Engineering approved-versions row this device was matched to">({selectedDevice.gia_component})</span>
+                        )}
                       </div>
                     )}
                     {selectedDevice.recommended_version && (
@@ -809,6 +859,9 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
               </button>
             </div>
             <div className="overflow-y-auto flex-grow space-y-4 pr-1">
+              {selectedDevice.cves && selectedDevice.cves.length > 0 && (
+                <ConfigCoverageNote cveConfig={cveConfig} />
+              )}
               {selectedDevice.cves && selectedDevice.cves.length > 0 ? (
                 selectedDevice.cves.map((cve, i) => (
                   <div key={i} className="p-4 bg-gray-800 rounded-lg">
@@ -827,6 +880,7 @@ const NetboxVulnerabilities = ({ apiBase, tenantId, tenantName }) => {
                       </span>
                     </div>
                     <p className="mt-2 text-gray-300 text-sm">{cve.description}</p>
+                    <CveConfigVerdict key={`${selectedDevice.resource_name}-${cve.id}`} verdict={cveConfig?.verdicts?.[cve.id]} />
                   </div>
                 ))
               ) : (

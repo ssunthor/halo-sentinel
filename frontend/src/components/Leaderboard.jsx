@@ -267,7 +267,7 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
                     <td className="py-2 px-2 text-gray-400 whitespace-nowrap">{c.platform_name || '—'}</td>
                     <td className="py-2 px-2 text-gray-400 font-mono">{c.current_firmware || '—'}</td>
                     <td className="py-2 px-2 text-amber-400 font-mono">{c.recommended_version || '—'}</td>
-                    <td className="py-2 px-2 text-blue-400 font-mono">{c.gia_recommended_version || '—'}</td>
+                    <td className="py-2 px-2 text-blue-400 font-mono" title={c.gia_component || ''}>{c.gia_recommended_version || '—'}</td>
                     <td className="py-2 px-2">
                       <a href={`https://nvd.nist.gov/vuln/detail/${c.cve_id}`} target="_blank" rel="noopener noreferrer"
                         className="text-blue-400 hover:underline font-mono font-bold" onClick={e => e.stopPropagation()}>
@@ -307,7 +307,7 @@ function DrilldownModal({ drilldown, onClose, apiBase }) {
                       <td className="py-2 px-2 text-gray-400 whitespace-nowrap">{d.platform_name || '—'}</td>
                       <td className="py-2 px-2 text-gray-400 font-mono">{d.current_firmware || d.os_version || '—'}</td>
                       <td className="py-2 px-2 text-amber-400 font-mono">{d.recommended_version || '—'}</td>
-                      <td className="py-2 px-2 text-blue-400 font-mono">{d.gia_recommended_version || '—'}</td>
+                      <td className="py-2 px-2 text-blue-400 font-mono" title={d.gia_component || ''}>{d.gia_recommended_version || '—'}</td>
                       <td className={`py-2 px-2 font-mono font-bold ${scoreColor(d.cve_score)}`}>{(d.cve_score || 0).toFixed(1)}</td>
                       <td className="py-2 px-2 text-gray-400 text-center">{d.cve_count || 0}</td>
                       <td className="py-2 px-2 text-center">
@@ -1089,6 +1089,14 @@ export default function Leaderboard({ apiBase, onSelectTenant }) {
                         <span className={`text-base font-black font-mono ${scoreColor(row.max_score)}`}>
                           {(row.max_score || 0).toFixed(1)}
                         </span>
+                        {row.effective_max_score != null && row.effective_max_score < row.max_score && (
+                          <div
+                            className={`text-[10px] font-mono font-bold ${scoreColor(row.effective_max_score)}`}
+                            title="Effective score: ignores CVEs that device configurations have ruled out (feature not enabled / already mitigated). Raw CVSS is shown above."
+                          >
+                            <span className="text-gray-500 font-normal">effective </span>{row.effective_max_score.toFixed(1)}
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         {row.risk_posture ? (

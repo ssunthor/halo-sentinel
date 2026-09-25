@@ -13,6 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import httpx
 from datetime import datetime, timedelta, timezone
+import config_applicability
+import cve_applicability
+import cve_matching
 import email_report
 import fba_client
 import gia_client
@@ -74,8 +77,8 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "password")
 
 DAILY_SCAN_TIME_UTC  = os.getenv("DAILY_SCAN_TIME_UTC",  "02:00")
 FBA_ENABLED          = os.getenv("FBA_ENABLED", "true").lower() not in ("0", "false", "no")
-FBA_MAX_CONCURRENCY  = int(os.getenv("FBA_MAX_CONCURRENCY", "20"))
-FBA_CACHE_HOURS      = int(os.getenv("FBA_CACHE_HOURS", "24"))
+FBA_RETRY_HOURS      = int(os.getenv("FBA_RETRY_HOURS", "1"))   # after a FAILED lookup (not a "not found")
+FBA_SYNC_MINUTES     = int(os.getenv("FBA_SYNC_MINUTES", "60"))  # how often to re-pull FBA's inventory listing
 
 CACHE_DIR = "/app/cache"
 CVE_CACHE_FILE = os.path.join(CACHE_DIR, "cve_cache.json")
@@ -120,6 +123,14 @@ _scan_tasks: dict[str, asyncio.Task] = {}
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Config-aware CVE applicability (per-CVE verdicts from device configs)
+config_applicability.configure(
+    llm=vllm_client,
+    thread_pool=thread_pool,
+    is_busy=lambda: _global_scan_state.get("status") == "running",
+)
+app.include_router(config_applicability.router)
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +220,21 @@ class VulnerabilityRequestBroker:
 # LLM HELPERS
 # ---------------------------------------------------------------------------
 
-async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None):
+def _analysis_cache_key(resource_name, cves, verdicts=None, fba_data=None):
+    """Prose-analysis cache key. Devices with config verdicts and/or an FBA
+    audit get fingerprints appended, so an analysis written before that data
+    existed (or under different data) is regenerated instead of reused."""
+    key = f"{resource_name}-{'-'.join(sorted(c['id'] for c in cves))}"
+    fp = cve_applicability.verdict_fingerprint(verdicts, cves)
+    if fp:
+        key += f"-cfg:{fp}"
+    fp = cve_applicability.fba_fingerprint(fba_data)
+    if fp:
+        key += f"-fba:{fp}"
+    return key
+
+
+async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None, verdicts=None):
     def call_llm():
         try:
             cve_list = "\n".join([f"- {c['id']}: {c['description']} (Score: {c['score']})" for c in cves])
@@ -240,7 +265,8 @@ async def get_llm_analysis(resource_name, model, os_info, cves, fba_data=None):
                 f"Analyze the security risk for resource '{resource_name}' "
                 f"(Model: {model}, OS: {os_info}).\n\n"
                 f"The following vulnerabilities were found:\n{cve_list}"
-                f"{fba_section}\n\n"
+                f"{fba_section}"
+                f"{cve_applicability.verdicts_prompt_block(verdicts, cves)}\n\n"
                 f"Provide a concise assessment of the impact and recommended actions."
             )
             messages = [{"role": "user", "content": prompt}]
@@ -375,38 +401,6 @@ def _build_nvd_query(os_name: str, os_version: str) -> str | None:
     return f"{os_name} {version_clean}" if version_clean else os_name
 
 
-def _version_key(v: str) -> tuple:
-    """Semantic version tuple for comparison. '17.9.4' → (17, 9, 4)."""
-    parts = []
-    for seg in re.split(r'[.\-_]', v or ''):
-        m = re.match(r'^(\d+)', seg)
-        if m:
-            parts.append(int(m.group(1)))
-    return tuple(parts) if parts else (0,)
-
-
-def _extract_recommended_version(cves_data: dict) -> str | None:
-    """
-    Scan NVD CPE configuration data across all CVEs and return the highest
-    versionEndExcluding (or versionEndIncluding as fallback), which represents
-    the minimum version that closes all known vulnerabilities.
-    Returns None if no structured version range data is present.
-    """
-    candidates = []
-    for item in cves_data.get("vulnerabilities", []):
-        for config in item.get("cve", {}).get("configurations", []):
-            for node in config.get("nodes", []):
-                for match in node.get("cpeMatch", []):
-                    if not match.get("vulnerable"):
-                        continue
-                    v = match.get("versionEndExcluding") or match.get("versionEndIncluding")
-                    if v and v.strip():
-                        candidates.append(v.strip())
-    if not candidates:
-        return None
-    return max(candidates, key=_version_key)
-
-
 def _parse_cve_response(cves_data: dict) -> tuple[list, float]:
     """Parse an NVD CVE response into (cve_list, highest_score)."""
     device_cves, highest = [], 0.0
@@ -509,17 +503,21 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
     print(f"      📊 {resource_name}: {len(final_cves_data.get('vulnerabilities', []))} raw CVEs for '{current_search_query}'")
 
-    # GIA engineering version lookup (cached per platform — one API call shared
-    # across all devices on the same platform within the same scan cycle).
+    # GTT Engineering recommended version (GIA/DIU): one cached table for the
+    # estate, matched per device from platform + model + NetBox role. Persisted
+    # only when the device is behind the engineering standard.
     gia_data = None
     try:
-        gia_data = await gia_client.lookup_platform_version(os_name)
+        gia_data = await gia_client.lookup_netbox(resource, resource_type)
     except Exception as gia_err:
-        print(f"      ⚠️ GIA lookup failed for '{os_name}': {gia_err}")
+        print(f"      ⚠️ GIA lookup failed for '{resource_name}': {gia_err}")
 
     try:
+        final_cves_data, dropped = cve_matching.filter_by_version(final_cves_data, os_name, os_version)
+        if dropped:
+            print(f"      🧹 {resource_name}: dropped {len(dropped)} CVE(s) outside NVD's version range for {os_name} {os_version}: {', '.join(dropped[:6])}{'…' if len(dropped) > 6 else ''}")
         device_cves, highest = _parse_cve_response(final_cves_data)
-        recommended_version = _extract_recommended_version(final_cves_data)
+        recommended_version = cve_matching.recommended_version(final_cves_data, os_name, os_version)
 
         partial_res = {
             "resource_name": resource_name,
@@ -529,7 +527,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "platform_name": os_name,
             "os_version": os_version,
             "recommended_version": recommended_version,
-            "gia_recommended_version": (gia_data or {}).get("gia_recommended_version"),
+            **gia_client.upgrade_fields(gia_data),
             "serial": serial,
             "pon": pon,
             "highest_severity_score": highest,
@@ -542,11 +540,17 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
 
         llm_analysis = partial_res["llm_analysis"]
         if device_cves:
-            key = f"{resource_name}-{'-'.join(sorted([c['id'] for c in device_cves]))}"
+            loop = asyncio.get_running_loop()
+            verdicts = await loop.run_in_executor(thread_pool, db.get_cve_verdicts, resource_name)
+            fba_data = await loop.run_in_executor(thread_pool, db.get_device_fba_by_name, resource_name)
+            key = _analysis_cache_key(resource_name, device_cves, verdicts, fba_data)
             if key in llm_analysis_cache:
                 llm_analysis = llm_analysis_cache[key]
             else:
-                llm_analysis = await get_llm_analysis(resource_name, model, f"{os_name} {os_version or ''}", device_cves)
+                llm_analysis = await get_llm_analysis(
+                    resource_name, model, f"{os_name} {os_version or ''}", device_cves,
+                    fba_data=fba_data, verdicts=verdicts,
+                )
                 llm_analysis_cache[key] = llm_analysis
                 save_cache(LLM_ANALYSIS_CACHE_FILE, llm_analysis_cache)
 
@@ -567,7 +571,7 @@ async def process_netbox_resource(resource, resource_type, client, broker, updat
             "platform_name": os_name,
             "os_version": os_version,
             "recommended_version": None,
-            "gia_recommended_version": (gia_data or {}).get("gia_recommended_version"),
+            **gia_client.upgrade_fields(gia_data),
             "serial": serial,
             "pon": pon,
             "highest_severity_score": 0.0,
@@ -896,14 +900,14 @@ async def run_global_scan():
             no_platform: list[dict] = []
             platform_names: set[str] = set()
 
-            for d in all_devices:
-                rtype = d.get("_rtype", "device")
+            def _device_os(d):
                 pinfo = d.get("platform")
                 os_name = pinfo.get("name") if pinfo else None
-                if rtype == "vm":
-                    os_version = d.get("custom_fields", {}).get("os_version")
-                else:
-                    os_version = d.get("custom_fields", {}).get("os_build")
+                field = "os_version" if d.get("_rtype", "device") == "vm" else "os_build"
+                return os_name, d.get("custom_fields", {}).get(field)
+
+            for d in all_devices:
+                os_name, os_version = _device_os(d)
 
                 query = _build_nvd_query(os_name, os_version)
                 if query:
@@ -960,37 +964,21 @@ async def run_global_scan():
             scan_ts = datetime.utcnow().isoformat()
 
             # ----------------------------------------------------------------
-            # Phase 3b — GIA engineering version lookup (one per platform)
+            # Phase 3b — GTT Engineering recommended versions (GIA/DIU)
+            # One table load for the whole estate; each device is matched to
+            # its engineering row in _make_record below.
             # ----------------------------------------------------------------
-            state["phase"] = f"Looking up engineering versions via GIA ({len(platform_names)} platforms)"
+            state["phase"] = "Loading engineering recommended versions from GIA"
             await _push_global({"type": "progress", "state": dict(state)})
 
-            gia_version_map: dict[str, str | None] = {}
-            print(f"  [GIA] starting lookups for {len(platform_names)} platform(s): {sorted(platform_names)[:5]}", flush=True)
-            if platform_names:
-                gia_tasks = {p: gia_client.lookup_platform_version(p) for p in platform_names}
-                gia_results = await asyncio.gather(*gia_tasks.values(), return_exceptions=True)
-                for pname, result in zip(gia_tasks.keys(), gia_results):
-                    if isinstance(result, Exception):
-                        print(f"  [GIA] lookup error for {pname!r}: {result}", flush=True)
-                        gia_version_map[pname] = None
-                    else:
-                        gia_version_map[pname] = (result or {}).get("gia_recommended_version")
-                found = sum(1 for v in gia_version_map.values() if v)
-                # Print a consolidated summary block — easy to find even if earlier per-lookup
-                # lines have scrolled out of the buffer.
-                hits   = sorted(p for p, v in gia_version_map.items() if v)
-                misses = sorted(p for p, v in gia_version_map.items() if not v)
-                print(
-                    f"\n{'='*60}\n"
-                    f"  [GIA] SCAN COMPLETE — {found}/{len(platform_names)} platforms matched\n"
-                    f"  Check /api/gia/status for full cache contents\n"
-                    f"  MATCHED ({len(hits)}): {', '.join(hits) or 'none'}\n"
-                    f"  NO MATCH ({len(misses)}): {', '.join(misses[:20])}"
-                    f"{'...' if len(misses) > 20 else ''}\n"
-                    f"{'='*60}\n",
-                    flush=True,
-                )
+            gia_table = None
+            if any(gia_client.is_fortinet(*_device_os(d)[:1]) for d in all_devices):
+                try:
+                    gia_table = await gia_client.ensure_table()
+                except Exception as gia_err:
+                    print(f"  [GIA] table load failed: {gia_err}", flush=True)
+            state["gia_table"] = gia_table["table_id"] if gia_table else None
+            gia_before = dict(gia_client.stats)
 
             state["phase_timings"]["gia_seconds"] = round(time.time() - phase_t, 1)
             phase_t = time.time()
@@ -1019,7 +1007,7 @@ async def run_global_scan():
                     "platform_name": os_name,
                     "os_version": os_version,
                     "recommended_version": recommended_version,
-                    "gia_recommended_version": gia_version_map.get(os_name) if os_name else None,
+                    **gia_client.upgrade_fields(gia_client.recommend_for_netbox(d, rtype)),
                     "serial": serial,
                     "pon": pon,
                     "highest_severity_score": highest,
@@ -1030,8 +1018,13 @@ async def run_global_scan():
 
             for query, devs in combo_map.items():
                 cves_data = nvd_results.get(query, {"vulnerabilities": []})
+                # Every device in a combo produced the same query, hence the same
+                # product and x.y.z version — the first one stands for the group.
+                os_name, os_version = _device_os(devs[0])
+                cves_data, dropped = cve_matching.filter_by_version(cves_data, os_name, os_version)
+                _global_scan_state["cves_dropped_by_version"] = _global_scan_state.get("cves_dropped_by_version", 0) + len(dropped)
                 device_cves, highest = _parse_cve_response(cves_data)
-                recommended_version = _extract_recommended_version(cves_data)
+                recommended_version = cve_matching.recommended_version(cves_data, os_name, os_version)
                 for d in devs:
                     tenant = d.get("tenant") or {}
                     tid = str(tenant.get("id", ""))
@@ -1055,6 +1048,14 @@ async def run_global_scan():
                     continue
                 tenant_names[tid] = tname
                 tenant_devices.setdefault(tid, []).append(_make_record(d, [], 0.0))
+
+            gia_now = gia_client.stats
+            state["gia_upgrade_needed"] = gia_now["upgrade_needed"] - gia_before["upgrade_needed"]
+            state["gia_compliant"] = gia_now["compliant"] - gia_before["compliant"]
+            state["gia_no_row"] = gia_now["no_row"] - gia_before["no_row"]
+            print(f"  [GIA] {state['gia_upgrade_needed']} device(s) behind the engineering standard, "
+                  f"{state['gia_compliant']} compliant, {state['gia_no_row']} Fortinet device(s) without a "
+                  f"matching row (table {state['gia_table'] or 'not loaded'}; see /api/gia/status)", flush=True)
 
             state["phase"] = f"Saving results for {len(tenant_devices)} tenants"
             await _push_global({"type": "progress", "state": dict(state)})
@@ -1219,7 +1220,9 @@ async def llm_analysis_worker():
                         continue
 
                     cves     = dev["cves"]
-                    cve_key  = f"{dname}-{'-'.join(sorted(c['id'] for c in cves))}"
+                    verdicts = await loop.run_in_executor(thread_pool, db.get_cve_verdicts, dname)
+                    fba_data = await loop.run_in_executor(thread_pool, db.get_device_fba_by_name, dname)
+                    cve_key  = _analysis_cache_key(dname, cves, verdicts, fba_data)
                     from_cache = cve_key in llm_analysis_cache
 
                     _ai_stats["current_device"] = dname
@@ -1231,9 +1234,6 @@ async def llm_analysis_worker():
                     else:
                         print(f"    🤖 [{tname}] analysing {dname} ({len(cves)} CVE(s), score {stub['highest_severity_score']:.1f})…")
                         t0 = time.time()
-                        fba_data = await loop.run_in_executor(
-                            thread_pool, db.get_device_fba_by_name, dname
-                        )
                         async with _llm_worker_sem:
                             analysis = await get_llm_analysis(
                                 dname,
@@ -1241,6 +1241,7 @@ async def llm_analysis_worker():
                                 dev.get("os", "Unknown"),
                                 cves,
                                 fba_data,
+                                verdicts,
                             )
                         elapsed_ms = round((time.time() - t0) * 1000)
                         _ai_stats["total_api_calls"] += 1
@@ -1978,12 +1979,16 @@ async def export_drilldown(type: str, value: str = ""):
 
 
 @app.get("/api/leaderboard")
-async def get_leaderboard(limit: int = 100, min_devices: int = 1):
+async def get_leaderboard(limit: int = 100, min_devices: int = 1, score: str = "cvss"):
     """
     Return tenants ranked by worst security posture (highest CVE score, then most vulnerable devices).
     Useful for prioritising remediation across the estate.
+
+    score=effective ranks by the config-aware score, which ignores CVEs a device's
+    running config has ruled out (not_applicable / mitigated). Every row carries
+    both max_score (raw CVSS) and effective_max_score regardless.
     """
-    return db.get_leaderboard(limit=min(limit, 1000), min_devices=min_devices)
+    return db.get_leaderboard(limit=min(limit, 1000), min_devices=min_devices, score=score)
 
 
 @app.get("/api/tenants")
@@ -2009,32 +2014,12 @@ async def get_status():
 
 
 @app.get("/api/gia/status")
-async def gia_status():
-    """Dump the GIA version cache — readable any time after a scan completes."""
-    import gia_client as _gia
-    import time as _time
-    cache = _gia._cache
-    now = _time.monotonic()
-    rows = []
-    for key, (result, cached_at) in sorted(cache.items()):
-        age_s = int(now - cached_at)
-        rows.append({
-            "platform_key": key,
-            "gia_recommended_version": (result or {}).get("gia_recommended_version"),
-            "gia_component": (result or {}).get("gia_component"),
-            "matched": result is not None and bool((result or {}).get("gia_recommended_version")),
-            "age_seconds": age_s,
-        })
-    matched = sum(1 for r in rows if r["matched"])
-    return {
-        "total_cached": len(rows),
-        "matched": matched,
-        "no_match": len(rows) - matched,
-        "cache_ttl_hours": _gia.GIA_CACHE_TTL_S / 3600,
-        "api_key_set": bool(_gia.GIA_API_KEY),
-        "base_url": _gia.GIA_BASE_URL,
-        "entries": rows,
-    }
+async def gia_status(reload: bool = False):
+    """The cached GTT Engineering versions table (GIA/DIU) and match counters.
+    ?reload=true re-fetches it now instead of waiting for the cache TTL."""
+    if reload:
+        await gia_client.ensure_table(force=True)
+    return gia_client.status()
 
 
 # ---------------------------------------------------------------------------
@@ -2222,10 +2207,13 @@ async def daily_scan_scheduler():
 
 async def fba_enrichment_worker():
     """
-    Background task: continuously enrich devices with FBA config-analysis data.
-    Fetches all devices whose FBA data is absent or stale (>FBA_CACHE_HOURS),
-    calls the FBA API in batches, and stores results in the DB.
-    Pauses while a global scan is running to avoid DB contention.
+    Background task: keep every Fortinet device's FBA audit data current.
+
+    One cycle = pull FBA's complete inventory listing (≈11 requests for ~10k
+    configs), match all our Fortinet devices against it locally, then fetch
+    the full audit only for devices whose FBA last_analyzed_at changed since we
+    stored it. Devices absent from the listing are "not found" at no cost.
+    Steady state is a dozen requests per cycle. Pauses while a global scan runs.
     """
     if not FBA_ENABLED:
         print("ℹ️  FBA enrichment disabled (FBA_ENABLED=false).")
@@ -2233,67 +2221,73 @@ async def fba_enrichment_worker():
 
     print("✅ FBA enrichment worker started.")
     await asyncio.sleep(30)  # let startup settle
+    loop = asyncio.get_running_loop()
 
     while True:
         try:
-            # Pause during active global scan
             if _global_scan_state.get("status") == "running":
                 await asyncio.sleep(30)
                 continue
 
-            loop = asyncio.get_running_loop()
-            stale = await loop.run_in_executor(
-                thread_pool, db.get_devices_needing_fba_refresh, FBA_CACHE_HOURS
-            )
+            t0 = time.time()
+            async with httpx.AsyncClient(verify=fba_client.FBA_VERIFY_SSL) as client:
+                items = await fba_client.list_all_inventory(client)
+                if items is None:
+                    err = fba_client.last_error or "unknown error"
+                    print(f"❌ FBA: could not fetch the inventory listing — {err}"
+                          + ("  → FBA's certificate is issued by the corporate CA; set FBA_VERIFY_SSL to the CA bundle path."
+                             if "CERTIFICATE_VERIFY_FAILED" in err else "")
+                          + f"  Retrying in {FBA_RETRY_HOURS}h.")
+                    fba_client.progress = {"aborted": err, "started_at": datetime.now(timezone.utc).isoformat()}
+                    await asyncio.sleep(FBA_RETRY_HOURS * 3600)
+                    continue
 
-            if not stale:
-                await asyncio.sleep(300)  # nothing to do — check again in 5m
-                continue
+                devices = await loop.run_in_executor(thread_pool, db.get_fortinet_devices_for_fba)
+                to_fetch, not_found = fba_client.plan_enrichment(devices, items)
+                scanned_at = datetime.now(timezone.utc).isoformat()
+                fba_client.progress = {"total": len(to_fetch), "done": 0, "found": 0, "not_found": len(not_found),
+                                       "failed": 0, "listing_items": len(items), "fortinet_devices": len(devices),
+                                       "started_at": scanned_at, "aborted": None}
+                print(f"🔍 FBA: listing has {len(items)} configs; {len(devices)} Fortinet devices — "
+                      f"{len(to_fetch)} audits to fetch (new or changed), {len(not_found)} not in FBA, "
+                      f"{len(devices) - len(to_fetch) - len(not_found)} already current ({time.time() - t0:.1f}s)")
 
-            device_names  = [d["resource_name"] for d in stale]
-            id_by_name    = {d["resource_name"]: d["id"] for d in stale}
-            total         = len(device_names)
-            done_count    = 0
-            found_count   = 0
-            CHUNK_SIZE    = 200
+                for dev in not_found:
+                    await loop.run_in_executor(thread_pool, db.update_device_fba, dev["id"], None, scanned_at)
 
-            print(f"🔍 FBA: enriching {total} device(s) in chunks of {CHUNK_SIZE} (concurrency={FBA_MAX_CONCURRENCY})")
+                done = found = failed = requeued = 0
+                for dev, nodes in to_fetch:
+                    if _global_scan_state.get("status") == "running":
+                        print("  FBA: pausing — global scan started")
+                        break
+                    data = await fba_client.fetch_details(client, nodes)
+                    done += 1
+                    if data is fba_client.LOOKUP_FAILED:
+                        failed += 1
+                        await loop.run_in_executor(thread_pool, db.mark_fba_lookup_failed, dev["id"], scanned_at)
+                        if failed >= 20 and found == 0:
+                            print(f"❌ FBA: aborting — first {failed} detail fetches all failed: {fba_client.last_error}")
+                            fba_client.progress["aborted"] = fba_client.last_error
+                            break
+                    else:
+                        if await loop.run_in_executor(thread_pool, db.update_device_fba, dev["id"], data, scanned_at):
+                            requeued += 1
+                        if data is not None:
+                            found += 1
+                    fba_client.progress.update(done=done, found=found, failed=failed)
+                    if done % 100 == 0:
+                        print(f"  FBA: {done}/{len(to_fetch)} audits fetched — {found} found, {failed} failed"
+                              + (f" | last error: {fba_client.last_error}" if failed else ""))
 
-            scanned_at = datetime.now(timezone.utc).isoformat()
-
-            for chunk_start in range(0, total, CHUNK_SIZE):
-                # Pause during global scan between chunks
-                if _global_scan_state.get("status") == "running":
-                    print("  FBA: pausing — global scan started")
-                    break
-
-                chunk = device_names[chunk_start:chunk_start + CHUNK_SIZE]
-                chunk_results = await fba_client.fetch_configs_chunk(chunk, FBA_MAX_CONCURRENCY)
-
-                # Write this chunk's results immediately so they appear in the UI
-                for name, data in chunk_results.items():
-                    device_id = id_by_name.get(name)
-                    if device_id is None:
-                        continue
-                    await loop.run_in_executor(
-                        thread_pool, db.update_device_fba, device_id, data, scanned_at
-                    )
-                    done_count += 1
-                    if data is not None:
-                        found_count += 1
-
-                pct = round(100 * done_count / total)
-                print(f"  FBA: {done_count}/{total} ({pct}%) — {found_count} configs found so far")
-
-                # Brief yield between chunks to keep the event loop responsive
-                await asyncio.sleep(1)
-
-            print(f"✅ FBA: complete — {done_count} processed, {found_count} configs found, {done_count - found_count} not available.")
+            print(f"✅ FBA: cycle complete in {time.time() - t0:.0f}s — {done} audits fetched ({found} found, "
+                  f"{failed} failed), {len(not_found)} marked not in FBA, {requeued} AI analyses queued; "
+                  f"{fba_client.stats['requests']} FBA requests so far. Next cycle in {FBA_SYNC_MINUTES}m.")
 
         except Exception as e:
             print(f"❌ FBA enrichment worker error: {e}")
+            traceback.print_exc()
 
-        await asyncio.sleep(60)  # brief pause before checking for more stale devices
+        await asyncio.sleep(FBA_SYNC_MINUTES * 60)
 
 
 @app.get("/api/device/{resource_name}/fba")
@@ -2304,6 +2298,31 @@ async def get_device_fba(resource_name: str):
     if data is None:
         raise HTTPException(status_code=404, detail="Device not found.")
     return data
+
+
+@app.post("/api/device/{resource_name}/fba/refresh")
+async def refresh_device_fba(resource_name: str):
+    """Look this one device up in FBA right now (instead of waiting for the
+    enrichment worker) and return the stored result. When the lookup fails the
+    reason is included as fba_lookup_error — e.g. a certificate-verification
+    failure, which means FBA_VERIFY_SSL needs to point at the corporate CA bundle."""
+    loop = asyncio.get_running_loop()
+    ids = await loop.run_in_executor(thread_pool, db.get_device_ids_by_name, resource_name)
+    if not ids:
+        raise HTTPException(status_code=404, detail="Device not found.")
+    fba_client.last_error = None
+    data = (await fba_client.fetch_configs_chunk([resource_name], 1)).get(resource_name)
+    now = datetime.now(timezone.utc).isoformat()
+    failed = data is fba_client.LOOKUP_FAILED
+    for device_id in ids:
+        if failed:
+            await loop.run_in_executor(thread_pool, db.mark_fba_lookup_failed, device_id, now)
+        else:
+            await loop.run_in_executor(thread_pool, db.update_device_fba, device_id, data, now)
+    out = await loop.run_in_executor(thread_pool, db.get_device_fba_by_name, resource_name)
+    if failed:
+        out["fba_lookup_error"] = fba_client.last_error
+    return out
 
 
 @app.on_event("startup")
@@ -2328,6 +2347,7 @@ async def startup_event():
     print("✅ Notification scheduler started.")
     asyncio.create_task(daily_scan_scheduler())
     asyncio.create_task(fba_enrichment_worker())
+    asyncio.create_task(config_applicability.worker())
     print("✅ Ready.")
 
 

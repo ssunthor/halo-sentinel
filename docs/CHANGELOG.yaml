@@ -1,0 +1,194 @@
+# ---------------------------------------------------------------------------
+# HALO STANDARD CHANGELOG
+#
+# STANDARD CATEGORIES:
+# - "🚀 Architecture & Infrastructure"
+# - "✨ New Features & Enhancements"
+# - "🎨 UI / UX Improvements"
+# - "🐛 Bug Fixes & Resilience"
+# - "🔒 Security & Auth"
+# - "🧹 Refactoring & Chores"
+# ---------------------------------------------------------------------------
+---
+- version: '1.0.0'
+  date: '2026-09-25'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🚀 Architecture & Infrastructure'
+      items:
+        - 'Official HALO MVP 1.0.0 Release.'
+
+- version: '0.1.6'
+  date: '2026-09-23'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🚀 Architecture & Infrastructure'
+      items:
+        - 'Centralized GIA API root configuration to share a single base URL across FBA and SAM/DIU services.'
+        - 'Optimized the engineering version lookup process to load a single global table per scan cycle, replacing inefficient per-platform API requests.'
+    - category: '✨ New Features & Enhancements'
+      items:
+        - 'Implemented advanced Fortinet device classification logic using platform, model, and NetBox role to accurately match devices to engineering standards.'
+        - 'Added support for parsing and splitting merged data rows from Confluence-backed version tables.'
+        - 'Introduced a comprehensive GIA status API providing visibility into cached tables, match counters, and manual reload capabilities.'
+        - 'Added persistence for the specific engineering component matched to a device to improve auditability of recommendations.'
+    - category: '🎨 UI / UX Improvements'
+      items:
+        - 'Enhanced the vulnerability dashboard and drill-down modals to display the specific engineering component matched for recommended versions via tooltips.'
+    - category: '🧹 Refactoring & Chores'
+      items:
+        - 'Introduced a comprehensive test suite for the GIA client to validate table parsing and device classification accuracy.'
+
+- version: '0.1.5'
+  date: '2026-09-22'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '✨ New Features & Enhancements'
+      items:
+        - 'Implemented a CPE-based CVE matching engine to reduce false positives by validating device versions against NVD structured data.'
+        - 'Enhanced the recommended version logic to suggest the lowest patching version specific to the product and release branch.'
+
+
+- version: '0.1.4'
+  date: '2026-09-22'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🚀 Architecture & Infrastructure'
+      items:
+        - 'Implemented a config-aware CVE applicability pipeline using a four-stage analysis workflow: requirement identification, line selection, assessment, and validation.'
+        - 'Introduced a global asynchronous rate limiter with a token-gate mechanism to throttle API requests.'
+        - 'Developed a comprehensive telemetry system to track request counts, HTTP status codes, and exceptions for API health monitoring.'
+        - 'Redesigned the FBA enrichment worker to use an inventory-first approach with paginated requests to reduce API overhead.'
+        - 'Implemented a thread pool to handle blocking database and LLM operations without stalling the event loop.'
+        - 'Added database tables for `device_configs`, `cve_requirements`, and `cve_config_verdicts` to persist analysis results.'
+        - 'Increased Nginx `client_max_body_size` and internal API limits to 6MB to support larger device configuration uploads.'
+        - 'Added support for custom SSL CA bundles via `FBA_VERIFY_SSL` for corporate certificate authorities.'
+    - category: '✨ New Features & Enhancements'
+      items:
+        - 'Introduced Effective Severity Scores that calculate the highest CVSS score among CVEs not ruled out by the device configuration.'
+        - 'Implemented multi-vendor configuration parsing supporting FortiOS, Junos, PAN-OS, and Cisco/Arista.'
+        - 'Added a deterministic validation layer that verifies LLM-cited evidence against actual configuration line ranges to prevent hallucinations.'
+        - 'Developed an intelligent configuration excerpting system that selects relevant snippets based on keywords and line budgets to optimize LLM context windows.'
+        - 'Implemented a verdict taxonomy (exploitable, mitigated, not_applicable, config_independent, undetermined) with automatic downgrading for missing evidence.'
+        - 'Added the ability to generate suggested CLI remediation commands to disable vulnerable features.'
+        - 'Implemented a fingerprinting system using SHA-256 hashes to cache verdicts and FBA data, preventing redundant LLM calls.'
+        - 'Enhanced device matching logic to support High Availability (HA) suffixes, ensuring cluster nodes are associated with a single logical device.'
+        - 'Added a manual FBA refresh API endpoint to trigger immediate data synchronization for specific devices.'
+    - category: '🎨 UI / UX Improvements'
+      items:
+        - 'Created a visualization system for CVE applicability, including verdict states, explanatory tooltips, and a stale state indicator.'
+        - 'Implemented `ConfigSnippet` and `ConfigCoverageNote` components to render configuration evidence with line-number gutters and provenance metadata.'
+        - 'Enhanced the Leaderboard to display and differentiate between raw CVSS scores and config-aware effective scores.'
+        - 'Added a detailed view in `CveConfigVerdict` to display analysis rationales, evidence snippets, and missing configuration sections.'
+        - 'Developed a custom React hook `useCveConfig` for asynchronous fetching and state management of device configuration verdicts.'
+        - 'Integrated granular FBA state reporting (pending, lookup_failed, not_analyzed, etc.) into the user interface.'
+    - category: '🐛 Bug Fixes & Resilience'
+      items:
+        - 'Implemented a retry mechanism with a backoff timer for devices failing their assessment.'
+        - 'Added a busy signal integration to pause background workers during global system scans.'
+        - 'Introduced a sentinel object `LOOKUP_FAILED` to distinguish between 404 not found and transport/server failures.'
+        - 'Refactored result merging logic for HA pairs to report the worst-case vulnerability status.'
+        - 'Added logic to prevent race conditions during rapid device switching in the UI using cancellation flags.'
+    - category: '🔒 Security & Auth'
+      items:
+        - 'Implemented a deterministic redaction system to strip secrets (hashes, PSKs, keys, SNMP communities) while preserving line numbers for citations.'
+        - 'Secured the manual configuration push API endpoint using Bearer tokens and shared secret tokens for Halo instances.'
+        - 'Ensured data privacy by redacting configuration text before persisting it to the database.'
+    - category: '🧹 Refactoring & Chores'
+      items:
+        - 'Standardized all API interactions through a central `_get` wrapper for consistent rate limiting and error logging.'
+        - 'Implemented database migrations to handle schema updates for `devices` and `tenants` tables.'
+        - 'Shifted from per-device lookups to a bulk enrichment workflow to optimize API usage.'
+        - 'Updated FBA configuration parameters to replace concurrency settings with sync intervals and retry durations.'
+
+
+- version: '0.1.3'
+  date: '2026-07-24'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🚀 Architecture & Infrastructure'
+      items:
+        - 'Fixed the CI/CD pipeline image flow by removing repository and tag overrides to ensure correct image annotations.'
+        - 'Enhanced build reproducibility and security by pinning base images to specific SHA256 digests.'
+    - category: '🧹 Refactoring & Chores'
+      items:
+        - 'Integrated Hadolint and Markdownlint configurations to standardize container and documentation quality.'
+        - 'Improved shell script robustness in the frontend entrypoint.'
+
+
+- version: '0.1.2'
+  date: '2026-07-24'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🐛 Bug Fixes & Resilience'
+      items:
+        - 'Resolved a backend crash in Kubernetes environments caused by Redis environment variable collisions.'
+
+
+- version: '0.1.1'
+  date: '2026-07-24'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🧹 Refactoring & Chores'
+      items:
+        - 'Removed obsolete GitLab CI configuration files from the backend and frontend.'
+
+
+- version: '0.1.0'
+  date: '2026-07-24'
+  author: 'Scott Chrestman'
+  changes:
+    - category: '🚀 Architecture & Infrastructure'
+      items:
+        - 'Implemented a multi-process container architecture using Supervisor to manage FastAPI, Redis, and Nginx services.'
+        - 'Configured Nginx as a reverse proxy with specialized support for Server-Sent Events (SSE) streaming and SPA routing.'
+        - 'Established a robust CI/CD pipeline via GitLab using Kaniko for linux/amd64 container builds and standardized templates.'
+        - 'Deployed a high-performance backend utilizing FastAPI, Uvicorn, uvloop, and orjson for optimized asynchronous I/O.'
+        - 'Integrated Kafka for high-volume syslog and NetFlow ingestion with parallel batch processing via ThreadPoolExecutor.'
+        - 'Implemented a SQLite persistence layer utilizing WAL mode and thread-local connections to support concurrent read/write operations.'
+        - 'Developed a runtime environment variable injection mechanism for the frontend via env-config.js and window._env_.'
+        - 'Integrated Redis for transient state management and multi-layer caching of scan results.'
+    - category: '✨ New Features & Enhancements'
+      items:
+        - 'Developed a multi-tenant CVE scanning system integrated with NetBox and the NIST NVD API, featuring query deduplication and semantic version comparison.'
+        - 'Integrated vLLM for AI-driven security assessments, estate risk summaries, and an interactive analyst chat interface with a defined security persona.'
+        - 'Implemented a Firewall Baseline Analysis (FBA) system for live configuration audits, including HA pair support and ACL exposure analysis.'
+        - 'Integrated a GIA API client for retrieving engineering-recommended software versions using bidirectional fuzzy matching.'
+        - 'Built a comprehensive notification system supporting SMTP (TLS/STARTTLS), dynamic subject tokenization, and scheduled delivery.'
+        - 'Created a multi-sheet Excel export engine using openpyxl with conditional formatting for vulnerability and estate reporting.'
+        - 'Implemented GeoIP enrichment using MaxMind GeoLite2 databases for Country, City, and ASN lookups with a dedicated caching layer.'
+        - 'Developed a security policy generator and configuration translation interface supporting multiple vendors (Cisco, Juniper, Palo Alto, Fortinet, Check Point).'
+        - 'Added a NetFlow anomaly detection engine using DFP scores to categorize traffic as Learning, Normal, or Anomalous.'
+        - 'Implemented an RSS feed aggregation component with a backend proxy to bypass CORS restrictions.'
+        - 'Created a data-driven User Guide with polymorphic block rendering and multi-format export (TXT, MD, PDF).'
+    - category: '🎨 UI / UX Improvements'
+      items:
+        - 'Implemented advanced 3D spatial visualizations using react-force-graph-3d and Three.js for network asset and traffic mapping.'
+        - 'Developed a 2D behavioral visualization component using react-force-graph-2d with hexagonal node rendering and risk-based coloring.'
+        - 'Integrated a rich-text editor based on Tiptap with custom extensions for image resizing and formatting.'
+        - 'Built a comprehensive security audit UI featuring side-by-side configuration comparison and a synchronized remediation workspace.'
+        - 'Designed a floating AI chat widget with Markdown rendering and context-aware prompting based on dashboard metrics.'
+        - 'Implemented a hierarchical Changelog viewer with version-family grouping and interactive documentation tooltips.'
+        - 'Developed a custom Tooltip system using React Portals with viewport clamping and accessibility support.'
+        - 'Created a high-density security dashboard using Tailwind CSS, featuring real-time threat metrics and risk-based leaderboards.'
+        - 'Added a pill-style TagInput component for managed email recipient lists with validation and normalization.'
+    - category: '🐛 Bug Fixes & Resilience'
+      items:
+        - 'Implemented a request retry mechanism with exponential backoff for vLLM API communications.'
+        - 'Optimized NVD API usage through a VulnerabilityRequestBroker that handles deduplication and local caching to prevent rate limiting.'
+        - 'Refined API base URL resolution using nullish coalescing operators to ensure reliable fallback across environments.'
+        - 'Implemented concurrency control using asyncio.Semaphore to limit simultaneous API requests and resource processing.'
+        - 'Added a cache-aware scan trigger logic to manage execution based on data freshness (fresh, stale, or missing).'
+        - 'Extended Nginx read timeouts to 3600s for streaming endpoints to prevent premature SSE connection closure.'
+    - category: '🔒 Security & Auth'
+      items:
+        - 'Integrated Keycloak OAuth2 client-credentials flow for authenticated vLLM inference.'
+        - 'Implemented security framework alignment for analysis, including PCI-DSS v4.0, SOC 2, HIPAA, CIS Benchmarks, and NIST 800-53.'
+        - 'Configured secure SMTP communication supporting multiple security modes (TLS, STARTTLS).'
+    - category: '🧹 Refactoring & Chores'
+      items:
+        - 'Implemented a migration utility to transition legacy JSON cache data into the SQLite database.'
+        - 'Integrated PMD Copy-Paste Detector (CPD) and a new ESLint flat configuration for improved code quality.'
+        - 'Optimized Docker build contexts via .dockerignore to exclude sensitive files and build artifacts.'
+        - 'Standardized project version control with comprehensive .gitignore files for both backend and frontend directories.'
+        - 'Removed deprecated NETBOX_ROLES configuration.'
